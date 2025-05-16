@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Neues CSS 2024</title>
+  <style>
+    /* Container Query aktivieren */
+    .card {
+      container-type: inline-size;
+      container-name: card;
+      padding: 1em;
+      border: 2px solid color-mix(in srgb, crimson 70%, white);
+      border-radius: 1em;
+      max-width: 600px;
+      margin: 2em auto;
+      font-family: system-ui, sans-serif;
+    }
+
+    .card h2 {
+      text-wrap: balance;
+      font-size: 2cqw;
+    }
+
+    .card button {
+      margin-top: 1em;
+      padding: 0.5em 1em;
+      border: none;
+      border-radius: 0.5em;
+      background: color-mix(in srgb, cornflowerblue 70%, white);
+      color: white;
+      cursor: pointer;
+    }
+
+    .card button:focus-visible {
+      outline: 2px solid blue;
+      outline-offset: 4px;
+    }
+
+    /* CSS :has() */
+    .card:has(button.clicked) {
+      background-color: color-mix(in srgb, lightyellow 50%, white);
+    }
+
+    /* CSS Nesting */
+    /*test*/
+    .card {
+      & p {
+        margin-top: 1em;
+        line-height: 1.6;
+      }
+    }
+
+    @container card (max-width: 400px) {
+      .card h2 {
+        color: darkred;
+        font-size: 1.2rem;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <h2>Moderne CSS Features</h2>
+    <p>Container Queries, :has(), color-mix() und mehr – in einer simplen Demo.</p>
+    <button onclick="this.classList.toggle('clicked')">Layout ändern</button>
+  </div>
+
+</body>
+</html>
