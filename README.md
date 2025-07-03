@@ -1,5 +1,3 @@
-# Projekt-Verteilte-Systeme## Christian war hier 💻
-Iven ist ein Nijissssss
+# Projekt-Verteilte-Systeme
 
-Iven ist der größte Frauenheld.
-
+Das ist unser Chat für das Modul Web-Programmierung!
