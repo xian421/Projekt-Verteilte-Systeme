@@ -1,0 +1,37 @@
+<main class="chat-container">
+    <header class="brand">
+      <h1 id="room-name-display" class="room-name"></h1>
+      <span id="user-display" aria-live="polite"></span>
+      <button id="edit-name" class="icon-btn" title="Namen ändern" hidden>✏️</button>
+    </header>
+
+    <!-- Name -->
+    <section id="name-form" class="card flow">
+      <label class="visually-hidden" for="name-input">Dein Name</label>
+      <input id="name-input" type="text" placeholder="Dein Name …" required autofocus />
+      <button id="start-btn" class="primary" type="button">Starten</button>
+    </section>
+
+    <!-- Chat -->
+    <section id="chat-ui" hidden class="flow">
+      <div id="chat-box" class="chat-box" role="log" aria-live="polite"></div>
+
+      <form id="chat-form" class="chat-form" autocomplete="off">
+        <input id="chat-input" type="text" placeholder="Nachricht eingeben …" required />
+        <button id="send-btn" class="primary" type="submit" disabled>
+          <span>Senden</span>
+        </button>
+      </form>
+    </section>
+
+    <!-- Blockiert -->
+    <section id="blocked-ui" hidden class="card blocked">
+      <p>⛔ Du wurdest vom Chat gesperrt.</p>
+      <p>Falls das ein Fehler ist, kontaktiere den Admin.</p>
+    </section>
+
+    <!-- Zu viele Verbindungen -->
+    <section id="too-many-connections-ui" hidden class="card blocked">
+      <p>⛔ Schließe deinen anderen Tab und lade die Seite neu.</p>
+    </section>
+  </main>
