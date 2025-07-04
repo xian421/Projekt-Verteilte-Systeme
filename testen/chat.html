@@ -3,6 +3,22 @@
 <head>
   <meta charset="utf-8" />
   <title>Chat</title>
+  <style>
+    /* ---- Grundlayout der Seite ------------------------------------------ */
+    html, body{
+      height:100%;
+      margin:0;
+      display:grid;           /* Zentriert alles, was im Body steht */
+      place-items:center;
+      font-family:system-ui, sans-serif;
+      background:linear-gradient(135deg,#dbeafe,#ffffff);
+    }
+    @media (prefers-color-scheme: dark){
+      body{
+        background:linear-gradient(135deg,#111827,#1f2937);
+      }
+    }
+  </style>
   <script type="module" src="/chat-app.js" defer></script>
 </head>
 <body>

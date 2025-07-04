@@ -1,3 +1,200 @@
+<style>
+
+
+:root {
+  --primary: #147aff;
+  --surface: rgba(255 255 255 / 0.65);
+  --surface-border: rgba(255 255 255 / 0.35);
+  --radius: 1rem;
+  --shadow: 0 8px 24px rgba(0 0 0 / 0.15);
+  --bg-start: #dbeafe;
+  --bg-end:   #ffffff;
+  accent-color: var(--primary);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --primary: #4dabff;
+    --surface: rgba(23 23 23 / 0.6);
+    --surface-border: rgba(255 255 255 / 0.12);
+    --bg-start: #111827;
+    --bg-end:   #1f2937;
+  }
+}
+
+/* ---------- Base ---------- */
+* { box-sizing: border-box; }
+:host {
+  display:block; /* macht das Host-Element layoutbar */
+  max-width:90cqi;
+}
+
+/* optional zentriert der Chat sich selbst, falls keine globale Zentrierung */
+:host{
+  margin-inline:auto;
+}
+
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0);
+  white-space: nowrap; border: 0;
+}
+
+/* ---------- Layout ---------- */
+.chat-container {
+  width: min(90cqi, 640px);
+  container-type: inline-size;
+  display: grid;
+  gap: 1.25rem;
+  padding: 2rem;
+  border-radius: var(--radius);
+  background: var(--surface);
+  backdrop-filter: blur(16px) saturate(180%);
+  border: 2px solid rgba(0, 0, 0, 0.2);
+  box-shadow: var(--shadow);
+}
+
+@container (width < 480px) {
+  .chat-container { padding: 1rem; }
+  .chat-box      { height: 40dvh; }
+}
+
+/* ---------- Chat Log ---------- */
+.chat-box {
+  height: 30dvh;
+  min-height: 300px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: .6rem;
+  padding: 1rem;
+  border-radius: calc(var(--radius) * .75);
+  background: rgba(255 255 255 / 0.6);
+  scroll-snap-type: y proximity;
+  scrollbar-width: thin;
+}
+.chat-box::-webkit-scrollbar     { width: .6rem; }
+.chat-box::-webkit-scrollbar-thumb{
+  background: color-mix(in sRGB, var(--primary) 40%, transparent);
+  border-radius: 999px;
+}
+
+.chat-message {
+  scroll-snap-align: start;
+  align-self: flex-start;
+  background: #eef4ff;
+  border-left: 3px solid var(--primary);
+  padding: .55rem .85rem;
+  border-radius: calc(var(--radius) * .5);
+  animation: fade-in .35s ease var(--delay, 0ms) both;
+  view-transition-name: message;
+}
+.chat-message:nth-child(odd) { background: #f4f8ff; }
+
+@keyframes fade-in {
+  from { opacity: 0; translate: 0 6px; }
+  to   { opacity: 1; translate: 0 0; }
+}
+
+/* ---------- Forms ---------- */
+.chat-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: .6rem;
+}
+
+input, button { font: inherit; border-radius: calc(var(--radius) * .5); border: 1px solid transparent; }
+input {
+  padding: .75rem;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  transition: border-color .2s, box-shadow .2s;
+}
+input:focus-visible {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 40%, transparent);
+}
+
+button.primary {
+  padding: .75rem 1.25rem;
+  background: var(--primary);
+  color: #1e2093;
+  cursor: pointer;
+  transition: background .2s;
+  border: #111827 1px solid;
+}
+button.primary:is(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--primary) 85%, white);
+}
+button.primary:disabled { opacity: .6; cursor: not-allowed; }
+
+/* Tooltip */
+.info-icon { position: relative; display: inline-flex; align-items: center; margin-left: .5rem; cursor: help; }
+.tooltip {
+  position: absolute;
+  inset-block-start: 115%; inset-inline-start: 50%;
+  translate: -50% 0;
+  background: #333; color: #fff;
+  padding: .5em .8em; border-radius: .5rem;
+  font-size: .85rem;
+  opacity: 0; pointer-events: none;
+  transition: opacity .25s, translate .25s;
+}
+.info-icon:hover .tooltip { opacity: 1; translate: -50% .3rem; }
+
+/* Motion-Respect */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after { animation: none !important; transition: none !important; }
+}
+
+
+/* ---------- Cards (falls noch nicht vorhanden) ---------- */
+.card {
+  background: rgba(255 255 255 / 0.75);
+  padding: 1rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--surface-border);
+}
+
+/* ---------- Blocked-Overlay ---------- */
+.blocked {
+  text-align: center;
+  background: #ffe8e8;
+  border: 1px solid #ff8a8a;
+}
+.blocked p { margin: .5rem 0; font-weight: 600; }
+
+
+.icon-btn{
+  background:none;border:none;cursor:pointer;
+  font-size:1rem;margin-left:.4rem;color:var(--primary);
+}
+.icon-btn:hover{opacity:.75}
+
+.system-message{
+  font-size:.85rem;color:#444;font-style:italic;
+  align-self:center;background:none;border:none;padding:0;
+}
+
+/*
+
+.blocked{
+  text-align:center;background:#ffe8e8;
+  border:1px solid #ff8a8a;font-weight:600;
+}
+*/
+
+.ip-info       { font-family: var(--mono); opacity: .6; }
+/* Grund­zustand: IPs immer ausblenden */
+.ip-info { display: none; }
+
+/* Sobald <body> die Klasse is-admin trägt, werden sie sichtbar */
+body.is-admin .ip-info { display: inline; }
+</style>
 <main class="chat-container">
     <header class="brand">
       <h1 id="room-name-display" class="room-name"></h1>

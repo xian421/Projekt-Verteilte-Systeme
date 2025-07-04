@@ -179,6 +179,7 @@ const server = http.createServer((req, res) => {
 });
 
 /* ----------- WebSocket-Teil ------------------------------------------ */
+// Websocket läuft auf selbem Port wie HTTP-Server
 const wss = new Server({ server });
 
 wss.on("connection", (socket, req) => {
@@ -292,6 +293,7 @@ server.listen(PORT, () => log(`💬 Server läuft auf Port ${PORT}`));
 
 /* ---------------------------------------------------------------------- */
 /* Kleine Helfer-Funktion ----------------------------------------------- */
+/*Alternative: Express.js oder body-parser Middleware verwenden aber das zu fett für unser kleines süßes Projekt*/
 function collectBody(req, res, cb) {
   let body = "";
   req.on("data", chunk => body += chunk);
