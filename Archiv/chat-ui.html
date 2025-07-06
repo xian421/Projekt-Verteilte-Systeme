@@ -1,4 +1,8 @@
-/* style.css *//* ---------- Design Tokens ---------- */
+<!--chat-ui.html-->
+
+<style>
+
+
 :root {
   --primary: #147aff;
   --surface: rgba(255 255 255 / 0.65);
@@ -22,15 +26,16 @@
 
 /* ---------- Base ---------- */
 * { box-sizing: border-box; }
-body {
-  margin: 0;
-  min-height: 100dvh;
-  display: grid;
-  place-items: center;
-  font-family: system-ui, sans-serif;
-  background: linear-gradient(135deg, var(--bg-start), var(--bg-end));
-  color-scheme: light dark;
+:host {
+  display:block; /* macht das Host-Element layoutbar */
+  max-width:90cqi;
 }
+
+/* optional zentriert der Chat sich selbst, falls keine globale Zentrierung */
+:host{
+  margin-inline:auto;
+}
+
 
 .visually-hidden {
   position: absolute !important;
@@ -50,7 +55,7 @@ body {
   border-radius: var(--radius);
   background: var(--surface);
   backdrop-filter: blur(16px) saturate(180%);
-  border: 1px solid var(--surface-border);
+  border: 2px solid rgba(0, 0, 0, 0.2);
   box-shadow: var(--shadow);
 }
 
@@ -106,7 +111,8 @@ body {
 input, button { font: inherit; border-radius: calc(var(--radius) * .5); border: 1px solid transparent; }
 input {
   padding: .75rem;
-  background: rgba(255 255 255 / 0.75);
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(0, 0, 0, 0.1);
   transition: border-color .2s, box-shadow .2s;
 }
 input:focus-visible {
@@ -118,9 +124,10 @@ input:focus-visible {
 button.primary {
   padding: .75rem 1.25rem;
   background: var(--primary);
-  color: #fff;
+  color: #1e2093;
   cursor: pointer;
   transition: background .2s;
+  border: #111827 1px solid;
 }
 button.primary:is(:hover, :focus-visible) {
   background: color-mix(in srgb, var(--primary) 85%, white);
@@ -189,3 +196,41 @@ button.primary:disabled { opacity: .6; cursor: not-allowed; }
 
 /* Sobald <body> die Klasse is-admin trägt, werden sie sichtbar */
 body.is-admin .ip-info { display: inline; }
+</style>
+<main class="chat-container">
+    <header class="brand">
+      <h1 id="room-name-display" class="room-name"></h1>
+      <span id="user-display" aria-live="polite"></span>
+      <button id="edit-name" class="icon-btn" title="Namen ändern" hidden>✏️</button>
+    </header>
+
+    <!-- Name -->
+    <section id="name-form" class="card flow">
+      <label class="visually-hidden" for="name-input">Dein Name</label>
+      <input id="name-input" type="text" placeholder="Dein Name …" required autofocus />
+      <button id="start-btn" class="primary" type="button">Starten</button>
+    </section>
+
+    <!-- Chat -->
+    <section id="chat-ui" hidden class="flow">
+      <div id="chat-box" class="chat-box" role="log" aria-live="polite"></div>
+
+      <form id="chat-form" class="chat-form" autocomplete="off">
+        <input id="chat-input" type="text" placeholder="Nachricht eingeben …" required />
+        <button id="send-btn" class="primary" type="submit" disabled>
+          <span>Senden</span>
+        </button>
+      </form>
+    </section>
+
+    <!-- Blockiert -->
+    <section id="blocked-ui" hidden class="card blocked">
+      <p>⛔ Du wurdest vom Chat gesperrt.</p>
+      <p>Falls das ein Fehler ist, kontaktiere den Admin.</p>
+    </section>
+
+    <!-- Zu viele Verbindungen -->
+    <section id="too-many-connections-ui" hidden class="card blocked">
+      <p>⛔ Schließe deinen anderen Tab und lade die Seite neu.</p>
+    </section>
+  </main>

@@ -1,27 +1,52 @@
+<!--chat.html-->
 <!DOCTYPE html>
 <html lang="de">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Chat</title>
+
   <style>
-    /* ---- Grundlayout der Seite ------------------------------------------ */
-    html, body{
+    /* ----- Reset ----- */
+    *,*::before,*::after{box-sizing:border-box}
+    html,body{overflow-x:hidden}
+
+    /* ----- Layout Desktop/Tablet ----- */
+    html,body{
       height:100%;
       margin:0;
-      display:grid;           /* Zentriert alles, was im Body steht */
-      place-items:center;
-      font-family:system-ui, sans-serif;
-      background:linear-gradient(135deg,#dbeafe,#ffffff);
+      background:linear-gradient(135deg,#dbeafe,#fff);
+      font-family:system-ui,sans-serif;
+      display:flex;
+      align-items:center;     /* vertikal zentriert */
+      justify-content:center;
+      min-height:100dvh;
     }
-    @media (prefers-color-scheme: dark){
+    @media (prefers-color-scheme:dark){
+      body{background:linear-gradient(135deg,#111827,#1f2937)}
+    }
+
+    /* ----- Layout Mobile ----- */
+    @media (max-width:480px){
       body{
-        background:linear-gradient(135deg,#111827,#1f2937);
+        align-items:stretch;  /* von oben bis unten */
+        justify-content:flex-start;
+        padding:0;
+      }
+      chat-app{
+        width:100vw;
+        height:100dvh;
+        display:block;
       }
     }
   </style>
+
   <script type="module" src="/chat-app.js" defer></script>
 </head>
 <body>
-  <chat-app room-hash="17bdc0fb1126379b9eda2e1962475afa2de20a1adf05f062a3279f9c577451ea" room-name="test"></chat-app>
+  <chat-app
+    room-hash="__ROOM_HASH__"
+    room-name="__ROOM_NAME__">
+  </chat-app>
 </body>
 </html>
