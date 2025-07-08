@@ -47,11 +47,13 @@ describe('staticServer', () => {
       expect(httpUtils.streamFile).toHaveBeenCalledWith(res, PAGE, 200, 'text/html');
     });
 
-    test('Pfad außerhalb PUBLIC_DIR → 403', () => {
+    test('Pfad außerhalb PUBLIC_DIR → 403 + true', () => {
       httpUtils.normPath.mockReturnValue('/../etc/passwd');
-      serveStatic(req, res);
+      // fs.existsSync nicht relevant, da Security-Hürde zuerst greift
+      const ret = serveStatic(req, res);
       expect(res.writeHead).toHaveBeenCalledWith(403);
       expect(res.end).toHaveBeenCalled();
+      expect(ret).toBe(true);
     });
 
     test('bestehende Datei mit CORS für .json', () => {
@@ -60,14 +62,23 @@ describe('staticServer', () => {
       const abs = path.join(PUBLIC_DIR, 'asset.json');
       fs.existsSync.mockReturnValue(true);
       serveStatic(req, res);
-      // 4. Aufruf: streamFile(res, abs, 200, undefined, true)
-      expect(httpUtils.streamFile).toHaveBeenCalledWith(res, abs, 200, undefined, true);
+      expect(httpUtils.streamFile).toHaveBeenCalledWith(
+        res,
+        abs,
+        200,
+        undefined,
+        true  // CORS für typische Web-Assets
+      );
     });
 
-    test('Unbekannte Route am Ende → false', () => {
-      httpUtils.normPath.mockReturnValue('/nope');
+    test('Nicht existente Datei liefert 404-Seite + true', () => {
+      httpUtils.normPath.mockReturnValue('/does-not-exist.png');
+      const abs = path.join(PUBLIC_DIR, 'does-not-exist.png');
       fs.existsSync.mockReturnValue(false);
-      expect(serveStatic(req, res)).toBe(false);
+      const ret = serveStatic(req, res);
+      const ERR = path.join(PUBLIC_DIR, '404.html');
+      expect(httpUtils.streamFile).toHaveBeenCalledWith(res, ERR, 404, 'text/html');
+      expect(ret).toBe(true);
     });
   });
 });
