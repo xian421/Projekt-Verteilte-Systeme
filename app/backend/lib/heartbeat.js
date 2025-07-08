@@ -1,7 +1,12 @@
-// lib/heartbeat.js
-// ------------------------------------------------------------
-// Heartbeat‑Utility als austauschbare Funktion
-// ------------------------------------------------------------
+// backend/lib/heartbeat.js
+/**
+ * Startet einen Heartbeat-Intervall, der alle WebSocket-Clients pingt
+ * und inaktive Verbindungen terminiert.
+ *
+ * @param {import('ws').Server} wss      WebSocket-Server-Instanz
+ * @param {number}            [interval=30000] Intervall in Millisekunden
+ * @returns {NodeJS.Timeout} Intervall-Timer, damit bei Bedarf gestoppt werden kann
+ */
 const logger = require("./logger");
 
 function startHeartbeat(wss, interval = 30_000) {

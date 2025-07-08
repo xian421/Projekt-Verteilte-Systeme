@@ -1,31 +1,22 @@
-# Multi-stage Dockerfile für Chat-System
-# ========================================
+# Dockerfile
+# Multi-Stage für statische Assets + Node-Backend
 
-### 1. Build-Stage (Vorbereitung für künftige Build-Steps) ###
-FROM node:18 as build
-
+# 1) Frontend-Copy-Stage
+FROM node:18 AS build
 WORKDIR /frontend
 COPY frontend/ .
-
-# Für später: npm ci && npm run build
-# Aktuell: nur kopieren, da noch kein Build-System
 RUN mkdir -p dist && cp -r * dist/ 2>/dev/null || true
 
-### 2. Runtime-Stage ###
+# 2) Runtime-Stage
 FROM node:18
-
 WORKDIR /app
 
-# Backend kopieren und Dependencies installieren
+# Backend + Dependencies
 COPY backend ./backend
-RUN cd backend && npm install 
-# RUN cd backend && npm install --production
+RUN cd backend && npm install
 
-# Frontend (später: nur gebaute Assets aus Build-Stage)
+# Frontend-Assets aus build/dist
 COPY --from=build /frontend/dist ./frontend/dist
 
-# Port freigeben
 EXPOSE 4441
-
-# Startkommando
 CMD ["node", "backend/index.js"]

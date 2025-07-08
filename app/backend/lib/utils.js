@@ -1,18 +1,33 @@
-// lib/utils.js
-// --------------------
-// Kleine, generische Helfer – **ohne** Logging!
-
+// backend/lib/utils.js
+/**
+ * Kleine, generische Helfer-Funktionen ohne Logging.
+ */
 const crypto = require("crypto");
 
-/* Zufälliger 64‑stelliger Hash */
-const randHash = () => crypto.randomBytes(32).toString("hex");
+/**
+ * Erzeugt einen zufälligen 64-stelligen Hex-String.
+ * @returns {string}
+ */
+function randHash() {
+  return crypto.randomBytes(32).toString("hex");
+}
 
-/* Minimales HTML‑Escape */
+/**
+ * Escaped spezielle HTML-Zeichen in einem String.
+ * @param {string} [str=""]
+ * @returns {string}
+ */
 function escapeHTML(str = "") {
-  return String(str).replace(/[&<>"'`]/g, c => ({
-    "&":"&amp;","<":"&lt;",">":"&gt;",
-    "\"":"&quot;","'":"&#39;","`":"&#96;"
-  }[c]));
+  return String(str).replace(/[&<>"'`]/g, (c) =>
+    ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+      "`": "&#96;"
+    }[c])
+  );
 }
 
 module.exports = { randHash, escapeHTML };

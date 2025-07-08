@@ -1,5 +1,4 @@
-# Docker Compose für Chat-System
-# ==============================
+# docker-compose.yml
 version: '3.8'
 
 services:
@@ -10,14 +9,10 @@ services:
     ports:
       - "4441:4441"
     environment:
-      - NODE_ENV=production
-      - PORT=4441
+      NODE_ENV: production
+      PORT: 4441
+    # nur Logs persistent halten
     volumes:
-      # Für Development: Live-Reload
-      # - ./app/backend:/app/backend
-      # - ./app/frontend:/app/frontend
-      
-      # Für Production: nur Logs persistent
       - chat-logs:/app/logs
     restart: unless-stopped
     healthcheck:

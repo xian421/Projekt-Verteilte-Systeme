@@ -1,52 +1,57 @@
 // backend/lib/chatRouter.js
-// ------------------------------------------------------------
-//  • "/" , "/chat" , "/chat.html"            → Landing
-//  • "/chat/<64‑hash>" (oder ...html/<hash>) → Chat‑Shell
-//  • alles andere unter /chat…               → Landing‑Fallback
-// ------------------------------------------------------------
-const path = require("path");
-const { URL } = require("url");
-
-const { PUBLIC_DIR } = require("./config");
+/**
+ * Router für Chat-Seiten und Redirects.
+ * • „/“, „/chat“ und „/chat.html“ → Landing-Page  
+ * • „/chat/<64-hex>“ → Chat-Shell  
+ * • „/chat…“ (mit falschem Hash) → Landing-Page  
+ * @param {import('http').IncomingMessage} req 
+ * @param {import('http').ServerResponse} res 
+ * @returns {boolean} true, wenn der Request verarbeitet wurde
+ */
+const path       = require("path");
+const { URL }    = require("url");
+const { PUBLIC_DIR }   = require("./config");
 const { serveLanding } = require("./staticServer");
 const { findRoom }     = require("./roomStore");
 const { streamFile, normPath } = require("./httpUtils");
 
-/* Statische Chat‑HTML‑Shell */
 const CHAT_HTML = path.join(PUBLIC_DIR, "pages", "chat.html");
 
 function chatRouter(req, res) {
-  const url       = new URL(req.url, `http://${req.headers.host}`);
-  const pathname  = normPath(req);
+  const url      = new URL(req.url, `http://${req.headers.host}`);
+  const pathname = normPath(req);
 
-  /* ---------- 0 | ?room=<hash> → Redirect ---------------- */
-  const qHash = url.searchParams.get("room");
-  if (qHash && /^[a-f0-9]{64}$/i.test(qHash)) {
-    if (!findRoom(qHash.toLowerCase())) return false;   // unbekannter Raum
-    res.writeHead(302, { Location:`/chat/${qHash.toLowerCase()}` }).end();
+  // Redirect bei ?room=<hash>
+  const roomParam = url.searchParams.get("room");
+  if (roomParam && /^[a-f0-9]{64}$/i.test(roomParam)) {
+    const hash = roomParam.toLowerCase();
+    if (!findRoom(hash)) return false;
+    res.writeHead(302, { Location: `/chat/${hash}` }).end();
     return true;
   }
 
-  /* ---------- 1 | Landing‑Routen ------------------------- */
+  // Landing-Routen
   if (pathname === "/" || pathname === "/chat" || pathname === "/chat.html") {
-    serveLanding(res); return true;
+    serveLanding(res);
+    return true;
   }
 
-  /* ---------- 2 | Chat‑Shell mit Hash ------------------- */
-  const match = /^\/chat(?:\.html)?\/([a-f0-9]{64})$/i.exec(pathname);
-  if (match) {
-    const hash = match[1].toLowerCase();
-    if (!findRoom(hash)) return false;                  // 404 an nächsten Router
+  // Chat-Shell mit gültigem Hash
+  const shellMatch = /^\/chat(?:\.html)?\/([a-f0-9]{64})$/i.exec(pathname);
+  if (shellMatch) {
+    const hash = shellMatch[1].toLowerCase();
+    if (!findRoom(hash)) return false;
     streamFile(res, CHAT_HTML, 200, "text/html");
     return true;
   }
 
-  /* ---------- 3 | Alles unter /chat… → Landing ---------- */
+  // Alle anderen /chat…-Routen → Landing
   if (pathname.startsWith("/chat/") || pathname.startsWith("/chat.html/")) {
-    serveLanding(res); return true;
+    serveLanding(res);
+    return true;
   }
 
-  /* ---------- 4 | Kein Match → andere Router ------------ */
+  // Nicht abgefangen
   return false;
 }
 
