@@ -71,11 +71,17 @@ router.post("/admin/update-blocklist", (req, res) =>
     const meta = findRoom(hash);
     if (!meta || !Array.isArray(list))
       return sendJSON(res, 400, { ok:false, error:"Ungültige Daten" });
-
+    // Alte Blockliste merken
+    const oldList = Array.isArray(meta.blocklist) ? [...meta.blocklist] : [];
+    // Neue Blockliste übernehmen
     meta.blocklist = list;
     const room = ensureLiveRoom(hash);
     room.blocklist = list;
-    list.forEach(ip => banIp(hash, ip));
+
+    // Nur wirklich neu hinzugefügte IPs bannen
+    const toBan = list.filter(ip => !oldList.includes(ip));
+    toBan.forEach(ip => banIp(hash, ip));
+
     logger.info(`🚫 Blockliste aktualisiert für Raum ${hash}`);
     sendJSON(res, 200, { ok:true });
   })

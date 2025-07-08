@@ -1,0 +1,3146 @@
+=== Verzeichnisstruktur ===
+.:
+Dockerfile
+README.md
+backend
+docker-compose.yml
+frontend
+projekt_dump.txt
+
+./backend:
+index.js
+lib
+package.json
+
+./backend/lib:
+apiRouter.js
+chatRouter.js
+config.js
+heartbeat.js
+httpUtils.js
+logger.js
+rateLimiter.js
+respond.js
+roomStore.js
+router.js
+staticServer.js
+utils.js
+wsHandler.js
+
+./frontend:
+api.js
+components
+img
+pages
+src
+styles
+tests
+utils
+utils.js
+
+./frontend/components:
+AdminPanel.js
+ChatApp.js
+ChatController.js
+Dashboard.js
+admin-template.html
+admin.css
+chat-template.html
+chat.css
+
+./frontend/img:
+admin-icon.png
+chat-icon.png
+
+./frontend/pages:
+404.html
+admin.html
+chat.html
+landing.html
+
+./frontend/src:
+chat-router.js
+landing.js
+
+./frontend/styles:
+landing.css
+tokens.css
+
+./frontend/tests:
+sanitize.test.js
+
+./frontend/utils:
+bus.js
+env.js
+sanitize.js
+
+=== Dateiinhalte ===
+
+
+--- ./projekt_dump.txt ---
+
+
+
+--- ./backend/package.json ---
+
+{
+  "name": "chat-backend",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+    },
+  "dependencies": {
+    "ws": "^8.13.0"
+  }
+}
+
+
+--- ./backend/index.js ---
+
+// backend/index.js â€“ Einstiegspunkt
+// ---------------------------------
+const http = require("http");
+const { Server } = require("ws");
+const { PORT }   = require("./lib/config");
+
+const { serveStatic } = require("./lib/staticServer");
+const apiRouter  = require("./lib/apiRouter");
+const chatRouter = require("./lib/chatRouter");
+const attachWs   = require("./lib/wsHandler");
+const startHeartbeat = require("./lib/heartbeat");
+const logger         = require("./lib/logger");
+/* -------- CORSâ€‘Preflight global ------------------------- */
+function handleOptions(req, res) {
+  res.writeHead(204, {
+    "Access-Control-Allow-Origin":  "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Max-Age":       "86400"
+  }).end();
+}
+
+/* -------- HTTPâ€‘Server mit Routingâ€‘Kette ----------------- */
+const server = http.createServer((req, res) => {
+  if (req.method === "OPTIONS") return handleOptions(req, res);
+
+  // 1) API
+  if (apiRouter(req, res)) return;
+  if (res.headersSent)     return;          // â† schon beantwortet
+
+  // 2) Chatâ€‘Routing (HTMLâ€‘Shell)
+  if (chatRouter(req, res)) return;
+  if (res.headersSent)     return;
+
+  // 3) Statische Dateien oder 404
+  serveStatic(req, res);
+});
+
+/* -------- WebSocketâ€‘Server ------------------------------ */
+const wss = new Server({ server });
+attachWs(wss);
+const hb = startHeartbeat(wss);
+
+/* -------- Start & Graceful Shutdown --------------------- */
+server.listen(PORT, () => logger.info(`ğŸ’¬ Server lÃ¤uft auf Port ${PORT}`));
+
+process.on("SIGINT", () => {
+  logger.info("ğŸ‘‹ SIGINT â€“ shutdown");
+  clearInterval(hb);
+  wss.clients.forEach(s => s.terminate());
+  server.close(() => process.exit(0));
+});
+
+
+--- ./backend/.eslintrc.json ---
+
+{
+  "root": true,
+  "env": { "browser": true, "es2022": true },
+  "extends": ["eslint:recommended"],
+  "parserOptions": { "sourceType": "module" },
+  "plugins": ["jsdoc"],
+  "rules": {
+    "no-unused-vars": ["warn", { "args": "none" }],
+    "no-undef": "error",
+    "no-console": "off",
+    "jsdoc/require-jsdoc": ["warn", {
+      "require": {
+        "ClassDeclaration": true,
+        "MethodDefinition": true
+      }
+    }],
+    "jsdoc/valid-types": "warn"
+  }
+}
+
+
+--- ./backend/lib/respond.js ---
+
+// backend/lib/respond.js
+// ----------------------
+// Hilfsâ€‘Funktion, die **immer** JSON + CORS sendet
+// und true zurÃ¼ckliefert, damit nachfolgende Router
+// nicht mehr weiterarbeiten.
+
+const { setSec } = require("./staticServer");
+
+/**
+ * json(res, status, obj) â†’ true
+ *  â€¢ FÃ¼gt Sicherheitsâ€‘ und CORSâ€‘Header hinzu
+ *  â€¢ Schickt JSONâ€‘Payload
+ *  â€¢ Gibt true zurÃ¼ck, sodass der aufrufende Router
+ *    signalisieren kann: â€Request erledigtâ€œ.
+ */
+function json(res, status = 200, obj = {}) {
+  if (res.headersSent) return true;          // Doppelâ€‘Sends abfangen
+  setSec(res, true);                         // CORS + Security
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(obj));
+  return true;
+}
+
+module.exports = { json };
+
+
+--- ./backend/lib/utils.js ---
+
+// lib/utils.js
+// --------------------
+// Kleine, generische Helfer â€“ **ohne** Logging!
+
+const crypto = require("crypto");
+
+/* ZufÃ¤lliger 64â€‘stelliger Hash */
+const randHash = () => crypto.randomBytes(32).toString("hex");
+
+/* Minimales HTMLâ€‘Escape */
+function escapeHTML(str = "") {
+  return String(str).replace(/[&<>"'`]/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",
+    "\"":"&quot;","'":"&#39;","`":"&#96;"
+  }[c]));
+}
+
+module.exports = { randHash, escapeHTML };
+
+
+--- ./backend/lib/heartbeat.js ---
+
+// lib/heartbeat.js
+// ------------------------------------------------------------
+// Heartbeatâ€‘Utility als austauschbare Funktion
+// ------------------------------------------------------------
+const logger = require("./logger");
+
+function startHeartbeat(wss, interval = 30_000) {
+  return setInterval(() => {
+    wss.clients.forEach(ws => {
+      if (ws.isAlive === false) {
+        logger.warn("Client stale â€“ terminating");
+        return ws.terminate();
+      }
+      ws.isAlive = false;
+      ws.ping();
+    });
+  }, interval);
+}
+
+module.exports = startHeartbeat;
+
+
+--- ./backend/lib/roomStore.js ---
+
+// lib/roomStore.js
+// ------------------------------------------------------------
+// Zentraler In-Memory-Store fÃ¼r RÃ¤ume + Hilfsfunktionen
+// ------------------------------------------------------------
+const { MAX_HISTORY, CLOSE_CODES, BACKPRESSURE_LIMIT } = require("./config");
+const { escapeHTML } = require("./utils");
+const logger         = require("./logger");
+/* --------------------------------------------------
+   Metadaten + Laufzeit-Strukturen
+-------------------------------------------------- */
+const roomsMeta = new Map();   // hash â†’ { name, blocklist }
+const liveRooms = new Map();   // hash â†’ runtime-Objekt
+
+const findRoom = hash => roomsMeta.get(hash);
+
+function ensureLiveRoom(hash) {
+  if (!liveRooms.has(hash)) {
+    liveRooms.set(hash, {
+      activeClients : new Map(),   // ip â†’ Set<socket>
+      userNames     : new WeakMap(),
+      ipNames       : new Map(),
+      leaveTimers   : new Map(),
+      history       : [],
+      blocklist     : findRoom(hash)?.blocklist || []
+    });
+  }
+  return liveRooms.get(hash);
+}
+
+/* --------------------------------------------------
+   Messaging-Helpers
+-------------------------------------------------- */
+const IP_SPAN_RE = /<span class="ip-info[^>]*>.*?<\/span>/g;
+
+// Nur an Admin-Socks senden (ohne History-Eintrag)
+function sendToAdmins(clientMap, payload) {
+  clientMap.forEach(set => set.forEach(sock => {
+    if (!sock.isAdmin) return;                       // nur Admins
+    if (sock.readyState !== sock.OPEN) return;
+    if (sock.bufferedAmount > BACKPRESSURE_LIMIT) {
+      sock.close(CLOSE_CODES.BACKPRESSURE, 'Backpressure'); return;
+    }
+    sock.send(payload);
+  }));
+}
+
+/* entfernt IP-Spans â€“ funktioniert fÃ¼r HTML **und** JSON-Strings */
+function stripIpSpans(payload) {
+  if (typeof payload !== "string") return payload;
+
+  /* Fall 1: JSONâ€String mit {text:"â€¦"} */
+  if (payload.startsWith("{")) {
+    try {
+      const obj = JSON.parse(payload);
+      if (typeof obj.text === "string") obj.text = obj.text.replace(IP_SPAN_RE, "");
+      return JSON.stringify(obj);
+    } catch { /* Parsing fehlgeschlagen â€“ weiter zu Plain-HTML */ }
+  }
+
+  /* Fall 2: Plain-HTML */
+  return payload.replace(IP_SPAN_RE, "");
+}
+
+/* â€” Broadcast an alle Sockets im Raum â€” */
+function sendToAll(clientMap, payload) {
+  clientMap.forEach(set => set.forEach(socket => {
+    if (socket.bufferedAmount > BACKPRESSURE_LIMIT) {
+      socket.close(CLOSE_CODES.BACKPRESSURE, "Backpressure"); return;
+    }
+    if (socket.readyState !== socket.OPEN) return;
+
+    const out = socket.isAdmin ? payload : stripIpSpans(payload);
+    socket.send(out);
+  }));
+}
+
+/* System-Nachrichten */
+function broadcastSystem(hash, text) {
+  const room = liveRooms.get(hash); if (!room) return;
+  const payload = JSON.stringify({ type: "system", text });
+  room.history.push(payload);
+  if (room.history.length > MAX_HISTORY) room.history.shift();
+  sendToAll(room.activeClients, payload);
+}
+
+/* --------------------------------------------------
+   IP-Bann & Blocklisten-Logik
+-------------------------------------------------- */
+/**
+ * banIp(hash, ip, { auto: boolean } = {})
+ *  auto === true  â†’ auto-Ban wegen Spam
+ *  auto === false â†’ manueller Ban durch Admin
+ */
+function banIp(hash, ip, { auto = false } = {}) {
+  const meta = findRoom(hash); if (!meta) return;
+  if (!meta.blocklist.includes(ip)) meta.blocklist.push(ip);
+
+  const room = ensureLiveRoom(hash);
+  room.blocklist = meta.blocklist;
+
+  if (room.activeClients.has(ip)) {
+    room.activeClients.get(ip)
+        .forEach(sock => sock.close(CLOSE_CODES.BLOCKED, "IP auto-banned"));
+    //room.activeClients.delete(ip);
+  }
+  
+  const msg = `<span class="ip-info hidden">ğŸš« ${ip} `
+            + (auto ? 'automatisch gebannt (Spam)' : 'manuell gebannt')
+            + '</span>';
+
+  // JSON-Objekt mit adminOnly-Flag
+  const payloadObj = { type: 'system', text: msg, adminOnly: true };
+  const payload    = JSON.stringify(payloadObj);
+
+  // â†’ in History **behalten**
+  room.history.push(payload);
+  if (room.history.length > MAX_HISTORY) room.history.shift();
+
+  // â†’ nur live an Admins senden
+  sendToAdmins(room.activeClients, payload);
+
+  logger.info(`ğŸš« ${ip} ${auto ? 'auto-ban' : 'manual ban'}`);}
+
+/* --------------------------------------------------
+   Export
+-------------------------------------------------- */
+module.exports = {
+  roomsMeta,
+  liveRooms,
+  findRoom,
+  ensureLiveRoom,
+  sendToAll,
+  broadcastSystem,
+  banIp,
+  stripIpSpans
+};
+
+
+--- ./backend/lib/apiRouter.js ---
+
+// lib/apiRouter.js
+// ----------------
+// Adminâ€‘APIs.  Nur noch Datenâ€‘/Logikâ€‘Code â€“ Routingâ€‘Boilerplate Ã¼bernimmt Router()
+
+const Router = require("./router");
+const { sendJSON, collectJSON } = require("./httpUtils");
+const { randHash }       = require("./utils");
+const logger             = require("./logger");const {
+  ADMIN_PASSWORD, ADMIN_TOKEN,
+  CLOSE_CODES
+} = require("./config");
+const {
+  roomsMeta, liveRooms, findRoom, ensureLiveRoom, banIp
+} = require("./roomStore");
+
+const router = new Router();
+
+/* ---------- POST /admin/login -------------------------- */
+router.post("/admin/login", (req, res) =>
+  collectJSON(req, res, ({ password }) => {
+    if (password !== ADMIN_PASSWORD)
+      return sendJSON(res, 403, { ok:false, error:"Falsches Passwort" });
+    sendJSON(res, 200, { ok:true, data:{ token: ADMIN_TOKEN } });
+  })
+);
+
+/* ---------- GET  /rooms.json --------------------------- */
+router.get("/rooms.json", (_req, res) => {
+  const list = Array.from(roomsMeta, ([hash, { name }]) => ({ hash, name }));
+  sendJSON(res, 200, { ok:true, data:list });
+});
+
+/* ---------- GET  /blocklist.json ----------------------- */
+router.get("/blocklist.json", (req, res) => {
+  const roomHash = new URL(req.url, `http://${req.headers.host}`)
+                     .searchParams.get("room");
+  const room = findRoom(roomHash);
+  sendJSON(res, 200, { ok:true, data: room ? room.blocklist : [] });
+});
+
+/* ---------- POST /admin/add-room ----------------------- */
+router.post("/admin/add-room", (req, res) =>
+  collectJSON(req, res, ({ name }) => {
+    if (!name) return sendJSON(res, 400, { ok:false, error:"Name fehlt" });
+    const hash = randHash();
+    roomsMeta.set(hash, { hash, name:name.trim(), blocklist:[] });
+    logger.info(`â• Raum angelegt: ${name} (${hash})`);
+    sendJSON(res, 200, { ok:true, data:{ hash, name:name.trim() } });
+  })
+);
+
+/* ---------- POST /admin/remove-room -------------------- */
+router.post("/admin/remove-room", (req, res) =>
+  collectJSON(req, res, ({ hash }) => {
+    const room = liveRooms.get(hash);
+    if (room) {
+      room.activeClients.forEach(set =>
+        set.forEach(sock =>
+          sock.close(CLOSE_CODES.ROOM_DELETED, "Room deleted")));
+      liveRooms.delete(hash);
+    }
+    roomsMeta.delete(hash);
+    logger.info(`ğŸ—‘ï¸  Raum entfernt: ${hash}`);
+    sendJSON(res, 200, { ok:true });
+  })
+);
+
+/* ---------- POST /admin/update-blocklist --------------- */
+router.post("/admin/update-blocklist", (req, res) =>
+  collectJSON(req, res, ({ hash, list }) => {
+    const meta = findRoom(hash);
+    if (!meta || !Array.isArray(list))
+      return sendJSON(res, 400, { ok:false, error:"UngÃ¼ltige Daten" });
+
+    meta.blocklist = list;
+    const room = ensureLiveRoom(hash);
+    room.blocklist = list;
+    list.forEach(ip => banIp(hash, ip));
+    logger.info(`ğŸš« Blockliste aktualisiert fÃ¼r Raum ${hash}`);
+    sendJSON(res, 200, { ok:true });
+  })
+);
+
+module.exports = router.handle.bind(router);
+
+
+--- ./backend/lib/httpUtils.js ---
+
+// lib/httpUtils.js
+// ----------------
+// Gemeinsame HTTPâ€‘Utilities: Securityâ€‘Header, JSONâ€‘Antwort, Bodyâ€‘Parser,
+// URLâ€‘Normalisierung.
+
+const { pipeline } = require("stream");
+const fs   = require("fs");
+const path = require("path");
+const { PUBLIC_DIR, MIME_TYPES } = require("./config");
+
+/* ---------- Securityâ€‘Header ---------------------------- */
+function setSec(res, allowCors = false) {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader(
+    "Cross-Origin-Resource-Policy",
+    allowCors ? "cross-origin" : "same-origin"
+  );
+
+  if (allowCors) {
+    res.setHeader("Access-Control-Allow-Origin",  "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers","Content-Type, Authorization");
+  }
+}
+
+/* ---------- JSONâ€‘Antwort ------------------------------- */
+function sendJSON(res, status = 200, obj = {}) {
+  if (res.headersSent) return true;
+  setSec(res, true);
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(obj));
+  return true;
+}
+
+/* ---------- Body einlesen ------------------------------ */
+function collectJSON(req, res, cb) {
+  let body = "";
+  req.on("data", chunk => (body += chunk));
+  req.on("end", () => {
+    try { cb(JSON.parse(body || "{}")); }
+    catch { sendJSON(res, 400, { ok:false, error:"Bad JSON" }); }
+  });
+  return true;
+}
+
+/* ---------- HilfsÂ­funktion: URLâ€“Pfad -------------------- */
+function normPath(req) {
+  return new URL(req.url, `http://${req.headers.host}`)
+           .pathname.replace(/\/{2,}/g, "/")
+           .replace(/\/$/, "") || "/";
+}
+
+/* ---------- Datei streamen (fÃ¼r staticServer u.a.) ------ */
+function streamFile(
+  res, absPath,
+  code = 200,
+  mime = MIME_TYPES[path.extname(absPath)] || "application/octet-stream",
+  allowCors = false
+) {
+  setSec(res, allowCors);
+  res.writeHead(code, { "Content-Type": mime });
+  pipeline(fs.createReadStream(absPath), res, err => {
+    if (err && !res.headersSent) res.writeHead(500).end("Fehler");
+  });
+}
+
+module.exports = { setSec, sendJSON, collectJSON, normPath, streamFile };
+
+
+--- ./backend/lib/logger.js ---
+
+// lib/logger.js
+// -------------
+// Miniâ€‘Logger mit EventEmitter.  Zentralisiert KonsolenÂ­ausgaben.
+
+const { EventEmitter } = require("events");
+
+class Logger extends EventEmitter {
+  #prefix(level) {
+    const ts = new Date().toISOString().slice(11, 19);
+    return `[${ts}] ${level.toUpperCase()}:`;
+  }
+
+  info (...args) { console.log (this.#prefix("info"), ...args);  this.emit("info",  ...args); }
+  warn (...args) { console.warn(this.#prefix("warn"), ...args);  this.emit("warn",  ...args); }
+  error(...args) { console.error(this.#prefix("err"), ...args);  this.emit("error", ...args); }
+}
+
+module.exports = new Logger();
+
+
+--- ./backend/lib/config.js ---
+
+// backend/lib/config.js
+// Zentrale Konfiguration des Chat-Servers
+// ---------------------------------------
+// Nur hier Limits / Ports / Paths Ã¤ndern!
+
+const crypto = require("crypto");
+const path   = require("path");
+
+/* â”€â”€â”€â”€â”€ 1 | Admin-Token â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "keule";
+const ADMIN_TOKEN    = crypto
+  .createHash("sha256")
+  .update(ADMIN_PASSWORD)
+  .digest("hex");
+
+/* â”€â”€â”€â”€â”€ 2 | Projekt-Verzeichnisse â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+ *
+ *  /app                 â† WORKDIR im Docker-Container
+ *   â”œâ”€ backend/         â† Node-Quellcode
+ *   â””â”€ frontend/        â† rohe Assets  (Entwicklung)
+ *        â””â”€ dist/       â† gebaute Assets (Production-Build)
+ */
+const ROOT_DIR      = path.join(__dirname, "..", "..");
+const FRONTEND_DIR  = path.join(ROOT_DIR, "frontend");
+const PUBLIC_DIR    =
+  process.env.NODE_ENV === "production"
+    ? path.join(FRONTEND_DIR, "dist")
+    : FRONTEND_DIR;
+
+/* â”€â”€â”€â”€â”€ 3 | Export â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+module.exports = {
+  /* Basis */
+  PORT: Number(process.env.PORT) || 4441,
+  ADMIN_PASSWORD,
+  ADMIN_TOKEN,
+
+  /* Limits & GrÃ¶ÃŸen */
+  MAX_HISTORY:         100,
+  RATE_LIMIT_COUNT:    5,        // Nachrichten
+  RATE_LIMIT_WINDOW:   10_000,    // ms
+  BACKPRESSURE_LIMIT:  1 * 1024 * 1024, // 1 MiB
+
+  /* Regex & Hash-LÃ¤nge */
+  HASH_RE: /^[a-f0-9]{64}$/i,
+
+  /* WebSocket-Close-Codes */
+  CLOSE_CODES: {
+    BLOCKED:        4000,
+    DUPLICATE:      4001,
+    UNKNOWN_ROOM:   4002,
+    INVALID_PACKET: 4003,
+    RATE_LIMIT:     4004,
+    BACKPRESSURE:   4005,
+    ROOM_DELETED:   4006,
+  },
+
+  /* MIME-Typen fÃ¼r statische Dateien */
+  MIME_TYPES: {
+    ".html": "text/html; charset=utf-8",
+    ".js":   "text/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".css":  "text/css; charset=utf-8",
+    ".png":  "image/png",
+    ".jpg":  "image/jpeg",
+    ".svg":  "image/svg+xml",
+    ".woff": "font/woff",
+    ".woff2":"font/woff2",
+    ".webp": "image/webp"
+  },
+
+  /* Ã–ffentlicher Webroot (siehe oben) */
+  PUBLIC_DIR,
+  ROOT_DIR,
+};
+
+
+--- ./backend/lib/staticServer.js ---
+
+// backend/lib/staticServer.js
+// ------------------------------------------------------------
+//  â€¢ Liefert Landing, Admin, Assets &Â 404 aus PUBLIC_DIR
+//  â€¢ Nutzt gemeinsame Utilities aus httpUtils.js
+// ------------------------------------------------------------
+const fs   = require("fs");
+const path = require("path");
+
+const { PUBLIC_DIR } = require("./config");
+const { setSec, streamFile, normPath } = require("./httpUtils");
+
+/* ---------- Pfade zu Standardâ€‘Seiten --------------------- */
+const LANDING = path.join(PUBLIC_DIR, "pages", "landing.html");
+const ERR404  = path.join(PUBLIC_DIR, "404.html");
+const ADMIN   = path.join(PUBLIC_DIR, "pages", "admin.html");
+
+/* ---------- Hauptâ€‘Staticâ€‘Router -------------------------- */
+function serveStatic(req, res) {
+  const urlPath = normPath(req);
+
+  /* feste Seiten */
+  if (urlPath === "/admin" || urlPath === "/admin.html")
+    return streamFile(res, ADMIN, 200, "text/html");
+  if (urlPath === "/dashboard" || urlPath === "/index.html")
+    return streamFile(res, path.join(PUBLIC_DIR, "index.html"), 200, "text/html");
+  if (urlPath === "/")
+    return streamFile(res, LANDING, 200, "text/html");
+  if (urlPath === "/404")
+    return streamFile(res, ERR404, 404, "text/html");
+
+  /* Assets */
+  const rel = path.normalize(urlPath).replace(/^\/+/, "");
+  const abs = path.join(PUBLIC_DIR, rel);
+
+  /* Pfadâ€‘Sicherheit + 404 */
+  if (!abs.startsWith(PUBLIC_DIR)) { res.writeHead(403).end(); return true; }
+  if (!fs.existsSync(abs))         { streamFile(res, ERR404, 404, "text/html"); return true; }
+
+  /* CORS nur fÃ¼r typische Webâ€‘Assets */
+  const needsCors = [".js",".mjs",".json",".wasm",".html",".css"].includes(path.extname(abs));
+  streamFile(res, abs, 200, undefined, needsCors);
+  return true;
+}
+
+/* ---------- Aliase fÃ¼r andere Module --------------------- */
+const serveLanding = res => streamFile(res, LANDING, 200, "text/html");
+const serve404     = res => streamFile(res, ERR404, 404, "text/html");
+
+module.exports = { serveStatic, serveLanding, serve404, setSec };
+
+
+--- ./backend/lib/wsHandler.js ---
+
+// lib/wsHandler.js
+// ------------------------------------------------------------
+// Kapselt alle WebSocket-Operationen:
+//  â€¢ Verbindung aufnehmen
+//  â€¢ Nachrichten verarbeiten (Join, Chat, NamensÃ¤nderung)
+//  â€¢ Rate-Limit + Auto-Ban
+//  â€¢ Backpressure-Guard geschieht in roomStore.sendToAll
+// ------------------------------------------------------------
+const { Server } = require("ws");
+const {
+  HASH_RE, CLOSE_CODES
+} = require("./config");
+const {
+  findRoom, ensureLiveRoom, sendToAll,
+  broadcastSystem, banIp, stripIpSpans
+} = require("./roomStore");
+const rateLimiter = require("./rateLimiter");
+const logger      = require("./logger");
+const { escapeHTML } = require("./utils");
+
+/* ---------------- Paket-Validation ----------------------- */
+function isValidPacket(pkg) {
+  if (!pkg || typeof pkg !== "object") return false;
+  switch (pkg.type) {
+    case "join":       return typeof pkg.name    === "string" && pkg.name.trim();
+    case "changeName": return typeof pkg.newName === "string" && pkg.newName.trim();
+    case "chat":       return typeof pkg.message === "string" && pkg.message.trim();
+    default:           return false;
+  }
+}
+
+/* ---------------- Haupt-Funktion ------------------------- */
+/**
+ * attachWss(wss)
+ *   - wss: Instanz von new Server({ server })
+ *   - FÃ¼gt 'connection' + Heartbeat-Handling hinzu
+ */
+function attachWss(wss) {
+  wss.on("connection", (socket, req) => {
+    // 1. Heartbeat-Flag setzen
+    socket.isAlive = true;
+    socket.on("pong", () => (socket.isAlive = true));
+
+    // 2. Hash & IP ermitteln
+    const hash = (req.url || "").replace(/^\/+/, "").toLowerCase();
+    let ip     = (req.headers["x-forwarded-for"] || req.socket.remoteAddress)
+                   .replace(/^.*:/, "");
+    if (ip.startsWith("ffff:")) ip = ip.slice(5);
+    ip = ip.replace(/^f{4}:0{1,4}:/i, "");
+
+    // 3. GrundprÃ¼fungen
+    if (!HASH_RE.test(hash) || !findRoom(hash)) {
+      return socket.close(CLOSE_CODES.UNKNOWN_ROOM, "Unknown room");
+    }
+    if (ensureLiveRoom(hash).blocklist.includes(ip)) {
+      return socket.close(CLOSE_CODES.BLOCKED, "IP blocked");
+    }
+
+    const room = ensureLiveRoom(hash);
+    if (room.activeClients.has(ip) && !room.leaveTimers.has(ip)) {
+      return socket.close(CLOSE_CODES.DUPLICATE, "Duplicate connection");
+    }
+
+    // 4. Client registrieren  â€“ History NICHT mehr hier senden
+    (room.activeClients.get(ip) ?? room.activeClients.set(ip, new Set()).get(ip))
+      .add(socket);
+
+    /* ---------- Nachricht-Handler ----------------------- */
+    socket.on("message", raw => {
+      let pkg;
+      try { pkg = JSON.parse(raw); } catch {
+        return socket.close(CLOSE_CODES.INVALID_PACKET, "Invalid JSON");
+      }
+      if (!isValidPacket(pkg))
+        return socket.close(CLOSE_CODES.INVALID_PACKET, "Invalid packet");
+
+      // Rate-Limit + Auto-Ban
+      if (!rateLimiter.allowed(ip)) {
+        banIp(hash, ip, { auto: true });        // â† Flag setzen
+        return socket.close(CLOSE_CODES.RATE_LIMIT, "Rate limit exceeded");
+      }
+      if (room.blocklist.includes(ip))
+        return socket.close(CLOSE_CODES.BLOCKED, "IP blocked");
+
+      /* --- Switch je Packet-Type ----------------------- */
+      switch (pkg.type) {
+        case "join": {
+          const name = pkg.name.trim().slice(0, 30);
+          const isAdmin = pkg.token === require("./config").ADMIN_TOKEN;
+          room.ipNames.set(ip, name);
+          room.userNames.set(socket, { name, ip });
+          socket.isAdmin = isAdmin;
+
+          // âœ Verlauf jetzt nachreichen
+          room.history.forEach(msg => {
+            if (socket.isAdmin) {            // Admin sieht alles
+              socket.send(msg); return;
+            }
+            try {
+              const obj = JSON.parse(msg);
+              if (obj.adminOnly) return;     // Ã¼berspringen
+            } catch {/* plain HTML â€“ durchlassen */}
+
+            socket.send(stripIpSpans(msg));  // IPs raus fÃ¼r normale Nutzer
+          });
+
+          if (room.leaveTimers.has(ip)) {
+            clearTimeout(room.leaveTimers.get(ip));
+            room.leaveTimers.delete(ip);
+          } else {
+            broadcastSystem(hash,
+              `ğŸ‘‹ ${escapeHTML(name)}<span class="ip-info hidden"> (${ip})</span> ist beigetreten`);
+          }
+          break;
+        }
+        case "changeName": {
+          const newName = pkg.newName.trim().slice(0, 30);
+          const oldName = room.ipNames.get(ip) || ip;
+          if (newName !== oldName) {
+            room.ipNames.set(ip, newName);
+            room.userNames.set(socket, { name: newName, ip });
+            broadcastSystem(hash,
+              `<span class="ip-info hidden"> (${ip})</span>âœï¸ ${escapeHTML(oldName)} heiÃŸt jetzt ${escapeHTML(newName)}`);
+          }
+          break;
+        }
+        case "chat": {
+          const user = room.userNames.get(socket) || { name: room.ipNames.get(ip) || "?" };
+          const ts = new Date().toLocaleTimeString("de-DE", { hour:"2-digit", minute:"2-digit" });
+          const text = `[${ts}] ${escapeHTML(user.name)}<span class="ip-info hidden"> (${ip})</span>: `
+                     + escapeHTML(pkg.message);
+          room.history.push(text);
+          if (room.history.length > 100) room.history.shift();
+          sendToAll(room.activeClients, text);
+          break;
+        }
+      }
+    });
+
+    /* ---------- Verbindungsende ------------------------- */
+    socket.on("close", () => {
+      logger.info(`Socket close (${ip})`);
+      room.activeClients.get(ip)?.delete(socket);
+      if (room.activeClients.get(ip)?.size === 0) {
+        const t = setTimeout(() => {
+          room.activeClients.delete(ip);
+          const name = room.ipNames.get(ip) || ip;
+          broadcastSystem(hash,
+            `ğŸšª ${escapeHTML(name)} <span class="ip-info hidden"> (${ip})</span> hat den Chat verlassen`);
+          room.ipNames.delete(ip); room.leaveTimers.delete(ip);
+        }, 3000);
+        room.leaveTimers.set(ip, t);
+      }
+    });
+  });
+}
+
+module.exports = attachWss;
+
+
+--- ./backend/lib/chatRouter.js ---
+
+// backend/lib/chatRouter.js
+// ------------------------------------------------------------
+//  â€¢ "/" , "/chat" , "/chat.html"            â†’ Landing
+//  â€¢ "/chat/<64â€‘hash>" (oder ...html/<hash>) â†’ Chatâ€‘Shell
+//  â€¢ alles andere unter /chatâ€¦               â†’ Landingâ€‘Fallback
+// ------------------------------------------------------------
+const path = require("path");
+const { URL } = require("url");
+
+const { PUBLIC_DIR } = require("./config");
+const { serveLanding } = require("./staticServer");
+const { findRoom }     = require("./roomStore");
+const { streamFile, normPath } = require("./httpUtils");
+
+/* Statische Chatâ€‘HTMLâ€‘Shell */
+const CHAT_HTML = path.join(PUBLIC_DIR, "pages", "chat.html");
+
+function chatRouter(req, res) {
+  const url       = new URL(req.url, `http://${req.headers.host}`);
+  const pathname  = normPath(req);
+
+  /* ---------- 0 | ?room=<hash> â†’ Redirect ---------------- */
+  const qHash = url.searchParams.get("room");
+  if (qHash && /^[a-f0-9]{64}$/i.test(qHash)) {
+    if (!findRoom(qHash.toLowerCase())) return false;   // unbekannter Raum
+    res.writeHead(302, { Location:`/chat/${qHash.toLowerCase()}` }).end();
+    return true;
+  }
+
+  /* ---------- 1 | Landingâ€‘Routen ------------------------- */
+  if (pathname === "/" || pathname === "/chat" || pathname === "/chat.html") {
+    serveLanding(res); return true;
+  }
+
+  /* ---------- 2 | Chatâ€‘Shell mit Hash ------------------- */
+  const match = /^\/chat(?:\.html)?\/([a-f0-9]{64})$/i.exec(pathname);
+  if (match) {
+    const hash = match[1].toLowerCase();
+    if (!findRoom(hash)) return false;                  // 404 an nÃ¤chsten Router
+    streamFile(res, CHAT_HTML, 200, "text/html");
+    return true;
+  }
+
+  /* ---------- 3 | Alles unter /chatâ€¦ â†’ Landing ---------- */
+  if (pathname.startsWith("/chat/") || pathname.startsWith("/chat.html/")) {
+    serveLanding(res); return true;
+  }
+
+  /* ---------- 4 | Kein Match â†’ andere Router ------------ */
+  return false;
+}
+
+module.exports = chatRouter;
+
+
+--- ./backend/lib/rateLimiter.js ---
+
+// lib/rateLimiter.js
+// ------------------------------------------------------------
+// Konfigurierbares Slidingâ€‘Windowâ€‘Rateâ€‘Limiterâ€‘Objekt
+// ------------------------------------------------------------
+const { RATE_LIMIT_COUNT, RATE_LIMIT_WINDOW } = require("./config");
+const logger = require("./logger");
+
+class RateLimiter {
+  constructor(maxCount, windowMs) {
+    this.MAX = maxCount;
+    this.WIN = windowMs;
+    this.state = new Map();         // ip â†’ {count, start}
+  }
+
+  allowed(ip) {
+    const now  = Date.now();
+    const rec  = this.state.get(ip) || { count: 0, start: now };
+
+    if (now - rec.start > this.WIN) { rec.count = 0; rec.start = now; }
+    rec.count += 1;
+    this.state.set(ip, rec);
+
+    const ok = rec.count <= this.MAX;
+    if (!ok) logger.warn(`Rateâ€‘Limit: ${ip} blocked (${rec.count}/${this.MAX})`);
+    return ok;
+  }
+}
+
+/* Defaultâ€‘Instanz â€“ kann im Test ersetzt werden */
+module.exports = new RateLimiter(RATE_LIMIT_COUNT, RATE_LIMIT_WINDOW);
+module.exports.RateLimiter = RateLimiter;          // Export der Klasse selbst
+
+
+--- ./backend/lib/router.js ---
+
+// lib/router.js
+// -------------
+// Miniâ€‘Router: Pfad + Method -> Handler
+
+const { normPath } = require("./httpUtils");
+
+class Router {
+  #routes = [];                       // [{method, path, handler}]
+
+  add(method, path, handler) {
+    this.#routes.push({ method, path, handler });
+    return this;                      // Chainable
+  }
+  get(path, h)  { return this.add("GET",  path, h); }
+  post(path, h) { return this.add("POST", path, h); }
+
+  handle(req, res) {
+    const p = normPath(req);
+    for (const r of this.#routes) {
+      if (r.method === req.method && r.path === p) {
+        return r.handler(req, res);   // Handler entscheidet, was passiert
+      }
+    }
+    return false;                     // nichts gepasst
+  }
+}
+
+module.exports = Router;
+
+
+--- ./Dockerfile ---
+
+# Multi-stage Dockerfile fÃ¼r Chat-System
+# ========================================
+
+### 1. Build-Stage (Vorbereitung fÃ¼r kÃ¼nftige Build-Steps) ###
+FROM node:18 as build
+
+WORKDIR /frontend
+COPY frontend/ .
+
+# FÃ¼r spÃ¤ter: npm ci && npm run build
+# Aktuell: nur kopieren, da noch kein Build-System
+RUN mkdir -p dist && cp -r * dist/ 2>/dev/null || true
+
+### 2. Runtime-Stage ###
+FROM node:18
+
+WORKDIR /app
+
+# Backend kopieren und Dependencies installieren
+COPY backend ./backend
+RUN cd backend && npm install --production
+
+# Frontend (spÃ¤ter: nur gebaute Assets aus Build-Stage)
+COPY --from=build /frontend/dist ./frontend/dist
+
+# Port freigeben
+EXPOSE 4441
+
+# Startkommando
+CMD ["node", "backend/index.js"]
+
+
+--- ./README.md ---
+
+# Chat System - Produktive Version
+
+## ğŸ“ Projektstruktur
+
+```
+/app
+â”œâ”€ backend/         â† Server-Code
+â”‚  â”œâ”€ index.js      â† Haupteingang
+â”‚  â”œâ”€ package.json
+â”‚  â””â”€ lib/          â† Module (WebSocket, Static, API)
+â””â”€ frontend/        â† Client-Code  
+   â”œâ”€ components/   â† Chat & Admin Web Components
+   â”œâ”€ pages/        â† Einzelseiten (/chat.html, /admin.html)
+   â””â”€ index.html    â† Dashboard (fÃ¼r /dashboard oder /)
+```
+
+## ğŸš€ Verwendung
+
+### Development
+```bash
+cd app/backend
+npm install
+npm start
+```
+
+### Production (Docker)
+```bash
+# Komplettes System bauen und starten
+docker-compose up --build
+
+# Im Hintergrund
+docker-compose up -d --build
+
+# Logs anzeigen
+docker-compose logs -f
+```
+
+## ğŸŒ Routen
+
+- `/` oder `/dashboard` â†’ Dashboard mit Navigation
+- `/chat.html` â†’ Chat-Interface
+- `/admin.html` â†’ Admin-Panel
+- `/api/rooms` â†’ JSON-API fÃ¼r RÃ¤ume
+
+## âœ¨ Features
+
+### CSS-HÃ¤rtung
+- Container-Queries statt Media-Queries
+- Flexible Layout-Komponenten
+- Responsive Design in jeder Containerbreite
+
+### Token-basierter Chat-Zugang
+- Ohne Room-Hash: Token-Eingabe erforderlich
+- Mit Hash: Direkter Chat-Zugang
+- Robust gegen URL-Manipulation
+
+### Multi-Stage Docker Build
+- Vorbereitet fÃ¼r Build-Tools (Vite, etc.)
+- Optimierte Production-Images
+- Getrennte Dependencies
+
+## ğŸ”§ Erweiterungen
+
+FÃ¼r Build-System (Vite/Webpack) in frontend/:
+```json
+{
+  "scripts": {
+    "build": "vite build",
+    "preview": "vite preview"
+  }
+}
+```
+
+Dann Dockerfile Build-Stage aktivieren:
+```dockerfile
+RUN npm ci && npm run build    # statt cp -r . dist/
+```
+
+
+--- ./docker-compose.yml ---
+
+# Docker Compose fÃ¼r Chat-System
+# ==============================
+version: '3.8'
+
+services:
+  chat-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "4441:4441"
+    environment:
+      - NODE_ENV=production
+      - PORT=4441
+    volumes:
+      # FÃ¼r Development: Live-Reload
+      # - ./app/backend:/app/backend
+      # - ./app/frontend:/app/frontend
+      
+      # FÃ¼r Production: nur Logs persistent
+      - chat-logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4441/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  chat-logs:
+    driver: local
+
+
+--- ./frontend/components/AdminPanel.js ---
+
+// frontend/components/AdminPanel.js
+// ---------------------------------
+import * as API from "../api.js";
+import bus      from "../utils/bus.js";
+import { getBases } from "../utils/env.js";
+
+/* ---------- Template laden ----------------------------- */
+async function loadTemplate(base) {
+  const res = await fetch(`${base}/components/admin-template.html`);
+  if (!res.ok) throw new Error("template not found");
+  return res.text();
+}
+
+export default class ChatAdmin extends HTMLElement {
+  /* ------------ State ---------------------------------- */
+  state = new Proxy({ rooms: [], blocklist: [] }, {
+    set: (o, p, v) => (o[p] = v, this.#render(p), true)
+  });
+
+  #currentHash = "";
+  #isLoggedIn  = false;
+  #panelInitialized = false;
+
+  constructor() { super(); this.attachShadow({ mode:"open" }); }
+
+  /* ------------ Lifecycle ------------------------------ */
+  async connectedCallback() {
+    const { http:HTTP_BASE } = getBases(this);
+    const tplHtml = await loadTemplate(HTTP_BASE);
+    const tpl     = document.createElement("template");
+    tpl.innerHTML = tplHtml;
+    tpl.content.querySelector("link[rel=stylesheet]").href =
+      `${HTTP_BASE}/components/admin.css`;
+    this.shadowRoot.append(tpl.content.cloneNode(true));
+
+    /* Authâ€‘DOM */
+    this.$authScreen   = this.shadowRoot.getElementById("auth-screen");
+    this.$authPassword = this.shadowRoot.getElementById("auth-password");
+    this.$authSubmit   = this.shadowRoot.getElementById("auth-submit");
+    this.$authError    = this.shadowRoot.getElementById("auth-error");
+    this.$panelTpl     = this.shadowRoot.getElementById("panel-tpl");
+
+    /* Authâ€‘Events */
+    this.$authSubmit.addEventListener("click", () => this.#handleLogin());
+    this.$authPassword.addEventListener("keypress",
+      e => e.key === "Enter" && this.#handleLogin());
+
+    if (localStorage.getItem("adminToken")) this.#showPanel();
+  }
+
+  /* ------------ Authâ€‘Flow ------------------------------ */
+  async #handleLogin() {
+    const password = this.$authPassword.value.trim();
+    if (!password) return;
+
+    try {
+      const { http:HTTP_BASE } = getBases(this);
+      const res = await fetch(`${HTTP_BASE}/admin/login`, {
+        method :"POST",
+        headers: { "Content-Type": "application/json" },
+        body   : JSON.stringify({ password })
+      });
+
+      if (!res.ok) throw new Error("login failed");
+      const { data:{ token } } = await res.json();
+      localStorage.setItem("adminToken", token);
+      this.#showPanel();
+    } catch {
+      this.#showError("âŒ Falsches Passwort");
+    }
+  }
+
+  #showError(msg) {
+    this.$authError.textContent = msg;
+    this.$authError.hidden = false;
+    this.$authPassword.value = "";
+    setTimeout(() => (this.$authError.hidden = true), 3000);
+  }
+
+  /* ------------ Panelâ€‘Init ----------------------------- */
+  #showPanel() {
+    if (this.#panelInitialized) return;  // schon da â†’ nichts tun
+    this.#panelInitialized = true;       // nÃ¤chstes Mal abbrechen
+
+    this.#isLoggedIn = true;
+    this.classList.add("admin-panel");
+    this.$authScreen.hidden = true;
+
+    /* Panelâ€‘DOM einblenden & cachen */
+    this.shadowRoot.append(this.$panelTpl.content.cloneNode(true));
+    this.$rooms           = this.shadowRoot.getElementById("rooms-list");
+    this.$blocks          = this.shadowRoot.getElementById("blocklist");
+    this.$roomInp         = this.shadowRoot.getElementById("room-name");
+    this.$addRoom         = this.shadowRoot.getElementById("add-room");
+    this.$ipInp           = this.shadowRoot.getElementById("block-ip");
+    this.$addIp           = this.shadowRoot.getElementById("add-ip");
+    this.$roomNameDisplay = this.shadowRoot.getElementById("room-name-display");
+
+    /* Events */
+    this.$addRoom.addEventListener("click", () => this.#createRoom());
+    this.$addIp  .addEventListener("click", () => this.#addIp());
+
+    this.#fetchRooms();
+  }
+
+  /* ------------ RÃ¤ume ---------------------------------- */
+  async #fetchRooms() {
+    try { this.state.rooms = await API.getRooms(); }
+    catch (e) { console.error("Fehler beim Laden der RÃ¤ume:", e); }
+  }
+
+  async #createRoom() {
+    const name = this.$roomInp.value.trim();
+    if (!name) return;
+    const tmp = "tmp-" + Math.random().toString(36).slice(2,10);
+    this.state.rooms = [...this.state.rooms, { hash:tmp, name }];
+    this.$roomInp.value = "";
+
+    try {
+      const { hash } = await API.addRoom(name);
+      await this.#fetchRooms();
+      const newRoom = this.state.rooms.find(r => r.hash === hash);
+      if (newRoom) {
+        this.#selectRoom(hash, newRoom.name);
+        this.shadowRoot.querySelectorAll(".room-title")
+            .forEach(el => el.classList.toggle(
+              "selected", el.textContent.includes(newRoom.name)));
+      }
+    } catch (e) {
+      this.state.rooms = this.state.rooms.filter(r => r.hash !== tmp);
+      alert("âŒ Raum konnte nicht angelegt werden: " + e.message);
+    }
+  }
+
+  async #removeRoom(hash) {
+    if (!confirm("Diesen Raum wirklich lÃ¶schen?")) return;
+    const backup = [...this.state.rooms];
+    this.state.rooms = backup.filter(r => r.hash !== hash);
+
+    try {
+      await API.removeRoom(hash);
+      if (hash === this.#currentHash) {
+        if (this.state.rooms.length) {
+          const { hash:h, name } = this.state.rooms[0];
+          this.#selectRoom(h, name);
+        } else {
+          this.#currentHash = "";
+          this.state.blocklist = [];
+          this.$roomNameDisplay.textContent = "";
+        }
+      }
+    } catch (e) {
+      this.state.rooms = backup;
+      alert("âŒ Raum konnte nicht gelÃ¶scht werden: " + e.message);
+    }
+  }
+
+  /* ------------ Blockâ€‘/Banâ€‘Logik ----------------------- */
+  async #selectRoom(hash, name) {
+    if (!hash) return;
+    this.#currentHash = hash;
+    this.$roomNameDisplay.textContent = name;
+
+    try {
+      this.state.blocklist = await API.getBlocklist(hash); // â† Array!
+    } catch (e) {
+      console.error("Fehler beim Laden der Blocklist:", e);
+      this.state.blocklist = [];
+    }
+    this.#updateBanButtonState();
+
+    // Events auslÃ¶sen
+    const payload = { hash, name };
+    this.dispatchEvent(new CustomEvent('room-selected', {
+      detail: payload, bubbles: true, composed: true
+    }));
+    bus.emit("room-selected", payload);            // â† neu
+  }
+
+  async #updateBlocklist(list) {
+    if (!this.#currentHash) return false;
+    const prev = [...this.state.blocklist];
+
+    try {
+      await API.updateBlocklist(this.#currentHash, list);
+      this.state.blocklist = list;
+      return true;
+    } catch (e) {
+      console.error("Fehler beim Speichern:", e);
+      this.state.blocklist = prev;
+      alert("âŒ Konnte die Blockliste nicht speichern: " + e.message);
+      return false;
+    }
+  }
+
+  async #addIp() {
+    const ip = this.$ipInp.value.trim();
+    if (!ip) return alert("âŒ Bitte IPâ€‘Adresse eingeben");
+    if (this.state.blocklist.includes(ip))
+      return alert("âŒ Diese IP ist bereits blockiert");
+
+    const ok = await this.#updateBlocklist([...this.state.blocklist, ip]);
+    if (ok) this.$ipInp.value = "";
+  }
+  async #removeIp(ip) {
+    await this.#updateBlocklist(this.state.blocklist.filter(x => x !== ip));
+  }
+
+  #updateBanButtonState() {
+    const dis = !this.#currentHash;
+    if (this.$addIp) {
+      this.$addIp.disabled    = dis;
+      this.$ipInp.disabled    = dis;
+      this.$ipInp.placeholder = dis ? "Erst Raum auswÃ¤hlen â€¦" : "IPâ€‘Adresse eingeben";
+    }
+  }
+
+  /* ------------ Renderâ€‘Helpers + Pipelines -------------- */
+  #btn(label, cls, cb) {
+    const b = document.createElement("button");
+    b.textContent = label; b.className = cls; b.onclick = cb; return b;
+  }
+  #btnCopy(text) { return this.#btn("â§‰","copy",() => navigator.clipboard.writeText(text)); }
+  #span(c,t) { return Object.assign(document.createElement("span"),{className:c,textContent:t}); }
+
+  #renderRooms() {
+    if (!this.$rooms) return;
+    this.$rooms.replaceChildren();
+    this.state.rooms.forEach(({hash,name}) => {
+      const li = document.createElement("li");
+      li.append(this.#btnCopy(hash));
+
+      const wrap = Object.assign(document.createElement("div"),{className:"room-main"});
+      const a = Object.assign(document.createElement("a"),{
+        className:"room-title room-link",
+        href:`/chat.html/${hash}`,
+        textContent:`ğŸ’¬ ${name}`
+      });
+      a.onclick = e => { e.preventDefault(); this.#selectRoom(hash,name);
+        this.shadowRoot.querySelectorAll(".room-title")
+            .forEach(el => el.classList.toggle("selected", el===a)); };
+      if (hash===this.#currentHash) a.classList.add("selected");
+      wrap.append(a,this.#span("hash",hash)); li.append(wrap);
+      li.append(this.#btn("âœ–","remove",()=>this.#removeRoom(hash)));
+      this.$rooms.append(li);
+    });
+    if (!this.#currentHash && this.state.rooms[0]) {
+      const {hash,name}=this.state.rooms[0];
+      this.#selectRoom(hash,name);
+      this.shadowRoot.querySelector(".room-title")?.classList.add("selected");
+    }
+  }
+
+  #renderBlocklist() {
+    if (!this.$blocks) return;
+    this.$blocks.replaceChildren();
+    if (!this.state.blocklist.length) {
+      this.$blocks.innerHTML="<li>Keine IPs blockiert</li>"; return;
+    }
+    this.state.blocklist.forEach(ip=>{
+      const li = document.createElement("li");
+      li.append(this.#span("ip-entry",ip),
+                this.#btnCopy(ip),
+                this.#btn("âœ–","remove",()=>this.#removeIp(ip)));
+      this.$blocks.append(li);
+    });
+  }
+
+  #render(prop) {
+    if (prop==="rooms")     this.#renderRooms();
+    if (prop==="blocklist") this.#renderBlocklist();
+  }
+}
+
+customElements.define("chat-admin", ChatAdmin);
+
+
+--- ./frontend/components/chat-template.html ---
+
+<!-- chat-template.html -->
+
+<link rel="stylesheet" href="/components/chat.css">
+
+<main class="chat-container">
+  <header class="brand">
+    <h1 id="room-name-display" class="room-name"></h1>
+    <span id="user-display" aria-live="polite"></span>
+    <button id="edit-name" class="icon-btn" aria-label="Namen Ã¤ndern" hidden>âœï¸</button>
+  </header>
+
+  <!-- Name-Formular -->
+  <section id="name-form" class="card">
+    <label class="visually-hidden" for="name-input">Dein Name</label>
+    <input id="name-input" type="text" placeholder="Dein Name â€¦" required autofocus />
+    <button id="start-btn" class="primary" type="button">Starten</button>
+  </section>
+
+  <!-- Token-Prompt (wenn kein room-hash vorhanden) -->
+  <section id="token-form" class="card" hidden>
+    <p>ğŸ”‘ Bitte Raum-Token eingeben</p>
+    <form id="hash-form">
+      <input id="hash-input" type="text" placeholder="64-stelliger Token"
+             pattern="[a-fA-F0-9]{64}" minlength="64" maxlength="64" required />
+      <button class="primary" type="submit">Beitreten</button>
+    </form>
+  </section>
+
+  <!-- Chat-Bereich -->
+  <section id="chat-ui" hidden>
+    <div id="chat-box" class="chat-box" role="log" aria-live="polite" aria-relevant="additions"></div>
+    <form id="chat-form" class="chat-form" autocomplete="off">
+      <input id="chat-input" type="text" placeholder="Nachricht eingeben â€¦" required />
+      <button id="send-btn" class="primary" type="submit" disabled>Senden</button>
+    </form>
+  </section>
+
+  <!-- Blockiert-Status -->
+  <section id="blocked-ui" hidden class="card blocked">
+    <p>â›” Du wurdest vom Chat gesperrt.</p>
+    <p>Falls das ein Fehler ist, kontaktiere den Admin.</p>
+  </section>
+
+  <!-- Zu viele Verbindungen -->
+  <section id="too-many-connections-ui" hidden class="card blocked">
+    <p>â›” SchlieÃŸe deinen anderen Tab und lade die Seite neu.</p>
+  </section>
+</main>
+
+
+--- ./frontend/components/ChatController.js ---
+
+/* ChatController â€“ reine Business-Logik (ohne Shadow-DOM-Stuff) */
+import { getBases } from "../utils/env.js";
+import * as API from "../api.js";
+import sanitize from "../utils/sanitize.js";
+
+const adminToken = localStorage.getItem('adminToken') || null;
+
+/**
+ * Raum-Konfiguration, die ChatController erwartet.
+ * @typedef {Object} RoomConfig
+ * @property {string} roomHash
+ * @property {string} [roomName]
+ * @property {string} [httpBase]
+ * @property {string} [wsBase]
+ */
+export default class ChatController {
+  /** @type {WebSocket | null} */   #ws = null;
+  /** @type {string} */             #userName = '';
+  /** @type {boolean} */            #joined = false;
+  /** @type {boolean} */            #wasBlocked = false;
+  /** @type {number} */             #retryDelay = 3500; // ms
+
+  /**
+   * @param {ShadowRoot} root
+   * @param {RoomConfig} cfg
+   */
+  constructor(root, cfg) {
+    this.cfg  = { ...cfg };
+    this.root = root;
+
+    /* ---------- DOM-Cache ---------------------------- */
+    this.$roomNameDisplay       = root.querySelector('#room-name-display');
+    this.$nameInput             = root.querySelector('#name-input');
+    this.$startBtn              = root.querySelector('#start-btn');
+    this.$chatForm              = root.querySelector('#chat-form');
+    this.$chatInput             = root.querySelector('#chat-input');
+    this.$sendBtn               = root.querySelector('#send-btn');
+    this.$userDisplay           = root.querySelector('#user-display');
+    this.$chatBox               = root.querySelector('#chat-box');
+    this.$nameSec               = root.querySelector('#name-form');
+    this.$chatSec               = root.querySelector('#chat-ui');
+    this.$blockedSec            = root.querySelector('#blocked-ui');
+    this.$tooManyConnectionsSec = root.querySelector('#too-many-connections-ui');
+    this.$editBtn               = root.querySelector('#edit-name');
+    this.$tokenForm             = root.querySelector('#token-form');
+    this.$hashForm              = root.querySelector('#hash-form');
+    this.$hashInput             = root.querySelector('#hash-input');
+
+    /* ---------- Events & Init ------------------------ */
+    this.#bindDOM();
+    if (this.cfg.roomHash) {
+      this.#connect();
+      this._loadRoomName();
+    } else {
+      /** @type {HTMLElement} */ (this.$tokenForm).hidden = false;
+      this.$hashForm?.addEventListener('submit', e => {
+        e.preventDefault();
+        const v = /** @type {HTMLInputElement} */ (this.$hashInput)?.value.trim().toLowerCase();
+        if (v && /^[a-f0-9]{64}$/.test(v)) {
+          this.updateConfig({ roomHash: v });
+          /** @type {HTMLElement} */ (this.$tokenForm).hidden = true;
+        }
+      });
+    }
+
+    const saved = localStorage.getItem('chatName');
+    if (saved) this.#autoJoin(saved);
+  }
+
+  /* ===== Ã–ffentliche API ================================= */
+
+  updateConfig(partial) {
+    let needsReconnect = false;
+
+    if (partial.roomHash && partial.roomHash !== this.cfg.roomHash) {
+      this.cfg.roomHash = partial.roomHash.toLowerCase();
+      needsReconnect = true;
+
+      // â‡’ Namen nachladen, wenn wir noch keinen expliziten roomName haben
+      if (!partial.roomName) this._loadRoomName();
+    }
+    if (typeof partial.roomName === 'string' && partial.roomName !== this.cfg.roomName) {
+      this.cfg.roomName = partial.roomName;
+      this._loadRoomName();
+    }
+    if (needsReconnect) {
+      this.#ws?.close(1000, 'room change');
+      this.#retryDelay = 3500;
+      this.#connect();
+    }
+  }
+
+  /* ===== WebSocket-Handling ============================== */
+
+  /** @private */
+  #buildWsUrl() {
+    const wsBase = this.cfg.wsBase || getBases().ws;
+    return `${wsBase}/${this.cfg.roomHash}`;
+  }
+
+  #connect() {
+    this.#ws = new WebSocket(this.#buildWsUrl());
+
+    this.#ws.addEventListener('open', () => (this.#retryDelay = 3500));
+
+    this.#ws.addEventListener('message', e => this.#handleMessage(e.data));
+
+    this.#ws.addEventListener('close', e => {
+      if (e.code === 4002) return this.#handleUnknownRoom();
+      if (e.code === 4006) return this.#handleRoomDeleted();
+      if (e.code === 4000) return this.#handleBlocked();
+      if (e.code === 4001) return this.#handleTooManyConnections();
+
+      if (!this.#wasBlocked) {
+        this.#appendSystem('âš ï¸ Verbindung getrennt â€“ reconnect â€¦');
+        setTimeout(() => {
+          if (!this.#wasBlocked) {
+            this.#retryDelay = Math.min(this.#retryDelay * 2, 30000);
+            this.#connect();
+          }
+        }, this.#retryDelay);
+      }
+    });
+
+    this.#ws.addEventListener('open', () => {
+      // Name schon bekannt, aber noch nicht angemeldet?
+      if (this.#userName && !this.#joined) {
+        this.#ws.send(JSON.stringify({
+          type: 'join',
+          name: this.#userName,
+          token: adminToken
+        }));
+        this.#joined = true;
+      }
+    });
+
+  }
+
+  /* ===== DOM-Events ===================================== */
+
+  #bindDOM() {
+    this.$startBtn.addEventListener('click', () => this.#join());
+    this.$nameInput.addEventListener('keypress', e => e.key === 'Enter' && this.#join());
+
+    this.$chatForm.addEventListener('submit', e => {
+      e.preventDefault();
+      if (!this.#userName) return this.#bounce(this.$nameInput);
+
+      const msg = this.$chatInput.value.trim();
+      if (!msg) return;
+
+      this.#ws?.send(JSON.stringify({ type: 'chat', message: msg }));
+      this.$chatInput.value = '';
+    });
+
+    this.$editBtn.addEventListener('click', () => this.#changeName());
+  }
+
+  /* ===== Join / Nickname-Logik =========================== */
+
+  #autoJoin(name) {
+    this.#userName = name;
+    this.$nameInput.value          = name;
+    this.$nameSec.hidden           = true;
+    this.$chatSec.hidden           = false;
+    this.$sendBtn.disabled         = false;
+    this.$userDisplay.textContent  = `ğŸ‘¤ ${name}`;
+    this.$editBtn.hidden           = false;
+
+    const sendJoin = () => {
+      if (this.#joined) return;      // <â”€â”€ verhindert Doppel-Join
+      this.#ws?.send(JSON.stringify({
+        type : 'join',
+        name,
+        token: adminToken
+      }));
+    this.#joined = true;
+    localStorage.setItem('chatName', name);
+  };
+    (this.#ws?.readyState === WebSocket.OPEN)
+      ? sendJoin()
+      : this.#ws?.addEventListener('open', sendJoin, { once: true });
+  }
+
+  #join() {
+    const name = this.$nameInput.value.trim();
+    if (!name) return this.#bounce(this.$nameInput);
+    this.#autoJoin(name);
+  }
+
+  #changeName() {
+    const newName = prompt('Neuer Name:', this.#userName)?.trim();
+    if (!newName || newName === this.#userName) return;
+    this.#ws?.send(JSON.stringify({ type: 'changeName', newName }));
+    this.$userDisplay.textContent = `ğŸ‘¤ ${newName}`;
+    this.#userName = newName;
+    localStorage.setItem('chatName', newName);
+  }
+
+  /* ===== WS-Nachrichten-Handling ======================== */
+
+  #handleMessage(raw) {
+    try {
+      const obj = /** @type {{type:string,text:string}} */ (JSON.parse(raw));
+      if (obj?.type === 'system') return this.#appendSystem(obj.text);
+    } catch {/* raw war Plain-HTML */}
+    this.#appendChat(raw);
+  }
+
+  #appendChat(text) {
+    const div = document.createElement('div');
+    div.className = 'chat-message';
+    div.innerHTML = sanitize(text);
+    this.$chatBox.append(div);
+    this.$chatBox.scrollTop = this.$chatBox.scrollHeight;
+  }
+
+  #appendSystem(text) {
+    const div = document.createElement('div');
+    div.className = 'system-message';
+    div.innerHTML = sanitize(text);
+    this.$chatBox.append(div);
+    this.$chatBox.scrollTop = this.$chatBox.scrollHeight;
+  }
+
+  /* ===== System-States ================================== */
+
+  #handleBlocked() {
+    this.#wasBlocked        = true;
+    this.$nameSec.hidden    = this.$chatSec.hidden = true;
+    this.$blockedSec.hidden = false;
+    this.$blockedSec.focus();
+    this.$blockedSec.addEventListener("keydown", this.#trap, true);
+    this.$editBtn.hidden    = true;
+    this.$userDisplay.textContent = '';
+  }
+
+  #handleUnknownRoom() {
+    this.$nameSec.hidden = this.$chatSec.hidden = true;
+    this.$blockedSec.hidden = false;
+    this.$blockedSec.querySelector('p').textContent =
+      'â“ Unbekannter Raum-Token â€“ bitte prÃ¼fen!';
+    this.$blockedSec.focus();
+    this.$blockedSec.addEventListener("keydown", this.#trap, true);
+    this.$blockedSec.removeEventListener("keydown", this.#trap, true);
+    this.$editBtn.hidden = true;
+    this.$userDisplay.textContent = '';
+    this.#wasBlocked = true;          // verhindert Reconnect-Loop
+  }
+
+  #handleRoomDeleted() {
+    this.$nameSec.hidden    = this.$chatSec.hidden = true;
+    this.$blockedSec.hidden = false;
+    this.$blockedSec.querySelector('p').textContent =
+      'ğŸ—‘ï¸ Dieser Raum wurde vom Admin gelÃ¶scht.';
+    this.$blockedSec.removeEventListener("keydown", this.#trap, true);
+    this.$userDisplay.textContent = '';
+    this.$editBtn.hidden = true;
+  }
+
+  #handleTooManyConnections() {
+    this.$nameSec.hidden = this.$chatSec.hidden = true;
+    this.$tooManyConnectionsSec.hidden = false;
+    this.$tooManyConnectionsSec.focus();
+    this.$tooManyConnectionsSec.addEventListener("keydown", this.#trap, true);
+    this.$editBtn.hidden = true;
+    this.$userDisplay.textContent =
+      'Zu viele Verbindungen â€“ bitte spÃ¤ter erneut versuchen.';
+  }
+
+  /* ===== Helpers ======================================== */
+
+  #bounce(el) {
+    el.focus();
+    el.animate(
+      { transform: ['translateX(0)', 'translateX(-4px)', 'translateX(4px)', 'translateX(0)'] },
+      { duration: 300, easing: 'ease-in-out' }
+    );
+  }
+
+  #trap = e => {
+    if (e.key !== "Tab") return;
+    e.preventDefault();
+    const focusables = e.currentTarget.querySelectorAll(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    if (!focusables.length) return;
+    const first = focusables[0];
+    const last  = focusables[focusables.length - 1];
+
+    if (e.shiftKey) {                    // â‡§â€‘TAB
+      if (document.activeElement === first) last.focus();
+    } else {                             // TAB vorwÃ¤rts
+      if (document.activeElement === last) first.focus();
+    }
+  };
+
+  async _loadRoomName() {
+    if (this.cfg.roomName) {
+      this.$roomNameDisplay.textContent = `ğŸ’¬ ${this.cfg.roomName}`;
+      return;
+    }
+    try {
+      const list = await API.getRooms();
+      const room = list.find(r =>
+        r.hash.toLowerCase() === this.cfg.roomHash);
+      this.$roomNameDisplay.textContent = room
+        ? `ğŸ’¬ ${room.name}`
+        : `ğŸ’¬ ${this.cfg.roomHash}`;
+    } catch {
+      this.$roomNameDisplay.textContent = `ğŸ’¬ ${this.cfg.roomHash}`;
+    }
+  }
+
+  destroy() { this.#ws?.close(1000, 'component removed'); }
+}
+
+
+--- ./frontend/components/chat.css ---
+
+/* frontend/components/chat.css */
+@layer reset, tokens, base, components, utilities;
+
+/* ---------- 1 | Reset ----------------------------- */
+@layer reset {
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
+  /* Globales Spacing-Reset fÃ¼r Typo-Elemente */
+  :where(h1, h2, h3, h4, p, ul, ol, dl, dd, figure, blockquote) {
+    margin: 0;
+    padding: 0;
+  }
+}
+
+/* ---------- 2 | Theme-Tokens ---------------------- */
+@layer tokens {
+  :root {
+    /* Chat-spezifische Breakpoints */
+    --bp-chat-sm: 30rem;       /* 480px */
+    --bp-chat-form-sm: 23.75rem; /* 380px */
+  }
+
+  :host {
+    /* ===== Basis (= helle Karte) ===== */
+    --chat-surface:        0 0% 100% / 90%;
+    --chat-surface-border: 0 0%   0% / .12;
+    --chat-text:           0 0%  15%;
+
+    /* Light-Akzentfarben */
+    --chat-primary:        220 90% 56%;
+    --chat-input-border:   0 0%   0% / .12;
+    --chat-shadow:         0 8px 24px rgb(0 0 0 / .15);
+
+    /* Aliase */
+    --primary:        var(--chat-primary);
+    --surface:        var(--chat-surface);
+    --surface-border: var(--chat-surface-border);
+    --text:           var(--chat-text);
+    --input-border:   var(--chat-input-border);
+    --radius:         1rem;
+    --shadow:         var(--chat-shadow);
+
+    /* CSS-HÃ¤rtung */
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-width: 0;           /* verhindert â€Wachstum" im Flex/Grid-Item */
+    min-height: 0;
+    container-type: inline-size;
+
+    height: 100dvh;
+    overscroll-behavior: contain;
+    color: hsl(var(--text));
+  }
+
+  /* Dark-Overrides per OS */
+  @media (prefers-color-scheme: dark) {
+    :host:not([theme]) {
+      --chat-primary:      205 100% 66%;
+      --chat-text:         0 0%  98%;
+      --chat-input-border: 0 0% 100% / .15;
+      --chat-shadow:       0 8px 24px rgb(0 0 0 / .40);
+    }
+  }
+
+  /* Manueller Dark-Switch */
+  :host([theme="dark"]) {
+    --chat-primary:        var(--chat-primary, 205 100% 66%);
+    --chat-text:           var(--chat-text,   0 0% 98%);
+    --chat-input-border:   var(--chat-input-border, 0 0% 100% / .15);
+    --chat-shadow:         var(--chat-shadow, 0 8px 24px rgb(0 0 0 / .40));
+  }
+}
+
+/* ---------- 3 | Base ------------------------------ */
+@layer base {
+  :host {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font: 100%/1.5 system-ui, sans-serif;
+    accent-color: hsl(var(--primary));
+  }
+}
+
+/* ---------- 4 | Components ------------------------ */
+@layer components {
+  /* 4.1 Chat-Container */
+  .chat-container {
+    container-type: inline-size;
+    container-name: chat;
+    width: min(98vw, 420px);
+    margin: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    padding: 2rem 1rem;
+    border-radius: var(--radius);
+    background: hsl(var(--surface));
+    backdrop-filter: blur(12px) saturate(150%);
+    border: 1.5px solid hsl(var(--surface-border));
+    box-shadow: var(--shadow);
+    min-height: 60dvh;
+    padding-bottom: calc(2rem + env(safe-area-inset-bottom));
+  }
+
+  /* 4.2 Container-Query fÃ¼r schmalen Chat */
+  @container chat (max-width: var(--bp-chat-sm)) {
+    .chat-container {
+      width: 100%;
+      min-height: 100dvh;
+      border-radius: 0;
+      padding-inline: .5rem;
+      padding-block: 1rem env(safe-area-inset-bottom);
+      box-shadow: none;
+    }
+  }
+
+  /* 4.3 Chat-Box */
+  .chat-box {
+    flex: 1;
+    min-height: 32dvh;
+    max-height: 48dvh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: .6rem;
+    padding: .7rem .5rem;
+    border-radius: calc(var(--radius) * .75);
+    background: color-mix(in srgb, hsl(var(--surface)) 95%, transparent);
+    scroll-snap-type: y proximity;
+    scrollbar-width: thin;
+  }
+  .chat-box::-webkit-scrollbar {
+    width: .6rem;
+  }
+  .chat-box::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, hsl(var(--primary)) 30%, transparent);
+    border-radius: 999px;
+  }
+  @container chat (max-width: var(--bp-chat-sm)) {
+    .chat-box {
+      scrollbar-width: none;
+    }
+    .chat-box::-webkit-scrollbar {
+      display: none;
+    }
+  }
+
+  /* 4.4 Nachrichten */
+  .chat-message,
+  .system-message {
+    --bg: color-mix(in srgb, hsl(var(--surface)) 96%, hsl(var(--primary)) 5%);
+    align-self: flex-start;
+    padding: .5rem .85rem;
+    border-radius: calc(var(--radius) * .5);
+    animation: fade-in .3s;
+    font-size: 1rem;
+    background: var(--bg);
+  }
+  .chat-message:nth-child(odd) {
+    --bg: color-mix(in srgb, hsl(var(--surface)) 98%, hsl(var(--primary)) 4%);
+  }
+  .chat-message {
+    border-left: 3px solid hsl(var(--primary));
+  }
+  .system-message {
+    background: none;
+    font-size: .92rem;
+    font-style: italic;
+    align-self: center;
+  }
+  @keyframes fade-in {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* 4.5 Chat-Form */
+  .chat-form {
+    display: flex;
+    gap: .5rem;
+    margin-top: auto;
+  }
+  @container chat (max-width: var(--bp-chat-form-sm)) {
+    .chat-form {
+      flex-direction: column;
+    }
+  }
+
+  /* 4.6 Input & Button Basis-Stile */
+  :is(input, button) {
+    font: inherit;
+    border-radius: calc(var(--radius) * .5);
+    border: 1px solid transparent;
+    max-width: 100%;
+  }
+  button {
+    white-space: nowrap; /* Einzeiler, aber kein Ãœberlauf */
+  }
+
+  input {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: .7rem;
+    width: 100%;
+    background: color-mix(in srgb, hsl(var(--surface)) 97%, transparent);
+    color: hsl(var(--text));
+    border: 1px solid hsl(var(--input-border));
+    transition: border-color .2s, box-shadow .2s;
+  }
+  input:focus-visible {
+    outline: none;
+    border-color: hsl(var(--primary));
+    box-shadow: 0 0 0 2px color-mix(in srgb, hsl(var(--primary)) 30%, transparent);
+  }
+
+  /* 4.7 Primary-Button */
+  button.primary {
+    padding: .7rem 1.1rem;
+    background: hsl(var(--primary));
+    color: #fff;
+    cursor: pointer;
+    border: 1px solid #1113;
+    transition: background .18s;
+    flex: 0 0 auto;
+  }
+  button.primary:disabled {
+    opacity: .6;
+    cursor: not-allowed;
+  }
+  button.primary:is(:hover, :focus-visible) {
+    background: color-mix(in srgb, hsl(var(--primary)) 80%, #fff);
+  }
+  button.primary:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+  }
+
+  /* 4.8 Icon-Buttons */
+  .icon-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1rem;
+    margin-left: .4rem;
+    color: hsl(var(--primary));
+    line-height: 1;
+    padding: .25rem;
+    border-radius: 50%;
+    transition: background .18s;
+  }
+  .icon-btn:hover {
+    background: color-mix(in srgb, hsl(var(--primary)) 22%, transparent);
+  }
+  .icon-btn:focus-visible {
+    outline: 2px solid hsl(var(--primary));
+    outline-offset: 2px;
+  }
+}
+
+/* ---------- 5 | Utilities -------------------------- */
+@layer utilities {
+  .card {
+    background: color-mix(in srgb, hsl(var(--surface)) 92%, transparent);
+    padding: 1rem;
+    border-radius: var(--radius);
+    border: 1px solid hsl(var(--surface-border));
+  }
+  .blocked {
+    text-align: center;
+    background: #ffe8e8;
+    border: 1px solid #ff8a8a;
+  }
+  .blocked p {
+    margin: .5rem 0;
+    font-weight: 600;
+  }
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    border: 0;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+
+--- ./frontend/components/ChatApp.js ---
+
+import ChatController from "./ChatController.js";
+import { getBases, roomHashFromPath } from "../utils/env.js";
+
+/* Template laden */
+async function loadTemplate(HTTP_BASE) {
+  const res = await fetch(`${HTTP_BASE}/components/chat-template.html`);
+  if (!res.ok) throw new Error('template not found');
+  return res.text();
+}
+
+class ChatApp extends HTMLElement {
+  static observedAttributes = ['room-hash', 'room-name'];
+
+  constructor() { super(); this.attachShadow({ mode:'open' }); }
+
+  async connectedCallback() {
+    const { http: HTTP_BASE, ws: WS_BASE } = getBases(this);   // <â”€â”€  NEU
+    const tpl = document.createElement('template');
+    tpl.innerHTML = await loadTemplate(HTTP_BASE);
+    tpl.content.querySelector('link[rel="stylesheet"]').href =
+               `${HTTP_BASE}/components/chat.css`;
+    this.shadowRoot.append(tpl.content.cloneNode(true));
+
+    /* Falls du <chat-app room-hash="â€¦"> nutzt, ist alles gut.
+       Wenn nicht, bleibt das alte Hash-Fallback wie gehabt. */
+    const roomHash = this.getAttribute('room-hash')?.toLowerCase() || roomHashFromPath();
+    
+    const roomName = this.getAttribute('room-name') || '';
+    this._controller = new ChatController(this.shadowRoot, {
+      roomHash, roomName,
+      httpBase: HTTP_BASE,
+      wsBase: WS_BASE
+    });
+  }
+
+  attributeChangedCallback(name, _old, val) {
+    this._controller?.updateConfig(
+      name === 'room-hash' ? { roomHash: val } : { roomName: val }
+    );
+  }
+
+  disconnectedCallback() { this._controller?.destroy(); }
+}
+
+customElements.define('chat-app', ChatApp);
+export default ChatApp;
+
+
+--- ./frontend/components/Dashboard.js ---
+
+// frontend/components/Dashboard.js
+import "./AdminPanel.js";
+import "./ChatApp.js";
+import bus from "../utils/bus.js";
+
+customElements.define('chat-dashboard', class extends HTMLElement {
+  #hash = '';
+  #name = '';
+
+  constructor() { super().attachShadow({mode:'open'}); }
+
+  connectedCallback() {
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host { display:grid; height:100dvh;
+                grid-template-columns: minmax(18rem, 28rem) 1fr; }
+        @container (max-width: 820px) {
+          :host { grid-template-columns: 1fr; }
+        }
+        chat-admin { border-right:1px solid #e5e7eb; height:100%; }
+        chat-app   { height:100%; }
+      </style>
+      <chat-admin></chat-admin>
+      <chat-app></chat-app>
+    `;
+
+    const chat  = this.shadowRoot.querySelector("chat-app");
+
+    this._handler = e => {
+      this.#hash = e.detail.hash;
+      this.#name = e.detail.name;
+      chat.setAttribute("room-hash", this.#hash);
+      chat.setAttribute("room-name", this.#name);
+    };
+    bus.on("room-selected", this._handler);
+
+    /* 2) Fallback: wenn Chat geladen wird und Hash leer ist,
+          zeigt er automatisch sein internes Tokenâ€‘Formular
+          (s. nÃ¤chste Codeâ€‘Ã„nderung). */
+  }
+
+  disconnectedCallback() { bus.off("room-selected", this._handler); }
+});
+
+
+--- ./frontend/components/admin-template.html ---
+
+<!-- components/admin-template.html -->
+<link rel="stylesheet" href="/components/admin.css" layer="components">
+
+<!-- ğŸ” Auth-Screen -->
+<div id="auth-screen">
+  <h2>ğŸ” Admin-Login</h2>
+  <input type="password" id="auth-password" placeholder="Passwort eingeben" autofocus>
+  <button id="auth-submit">Einloggen</button>
+  <p id="auth-error" hidden>âŒ Falsches Passwort</p>
+</div>
+
+<!-- ğŸ› ï¸ Panel (wird erst nach Login sichtbar) -->
+<template id="panel-tpl">
+  <h1>ğŸ› ï¸ Admin Panel</h1>
+  <main>
+    <section>
+      <h2>Blockierte&nbsp;IPs <span id="room-name-display"></span></h2>
+      <ul id="blocklist"><li>Keine IPs blockiert</li></ul>
+      <div class="inputRow">
+        <input id="block-ip" type="text" placeholder="Neue IP sperren">
+        <button id="add-ip">HinzufÃ¼gen</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>RÃ¤ume</h2>
+      <ul id="rooms-list"><li>Ladeâ€¦</li></ul>
+      <div class="inputRow">
+        <input id="room-name" type="text" placeholder="Raumname â€¦">
+        <button id="add-room">Anlegen</button>
+      </div>
+    </section>
+  </main>
+</template>
+
+
+--- ./frontend/components/admin.css ---
+
+/* frontend/components/admin.css */
+
+/* ganz oben: Layers definieren */
+@layer reset, base, components, overrides;
+
+/* 1) Reset-Layer fÃ¼r Box-Sizing und Global-Spacing-Reset */
+@layer reset {
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
+  /* AbstÃ¤nde bei Typo-Elementen auf 0 setzen (ohne SpezifitÃ¤tskosten) */
+  :where(h1, h2, h3, p, ul, ol, figure, blockquote, dl, dd) {
+    margin: 0;
+    padding: 0;
+  }
+}
+
+/* 2) Base-Layer: Variablen, Host-Grundregeln & Breakpoints */
+@layer base {
+  :root {
+    /* Breakpoint-Variablen */
+    --bp-sm: 600px;
+    --bp-md: 900px;
+  }
+
+  :host {
+    /* Farb- und Radius-Variablen */
+    --bg: #f8fafc;
+    --card: #fff;
+    --text: #0f172a;
+    --accent: #2563eb;
+    --accent-bg: #eef2ff;
+    --danger: #dc2626;
+    --danger-bg: #fee2e2;
+    --muted: #64748b;
+    --border: #e2e8f0;
+    --radius: 1.2rem;
+    --shadow: 0 2px 12px rgb(16 30 54/.08);
+
+    /* CSS-HÃ¤rtung */
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    container-type: inline-size;
+
+    /* Grund-Typografie & Hintergrund */
+    font-family: system-ui, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    min-height: 100vh;
+    padding: 2rem .7rem 3.5rem;
+  }
+
+  :host(:not(.admin-panel)) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0; /* override */
+  }
+
+  :host(.admin-panel) {
+    display: block;
+    padding: 2rem .7rem 3.5rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :host {
+      --bg: #101324;
+      --card: #18192e;
+      --text: #f1f5f9;
+      --accent: #60a5fa;
+      --accent-bg: #29346a;
+      --danger-bg: #6d2323;
+      --muted: #94a3b8;
+      --border: #232347;
+      --shadow: 0 2px 16px rgb(36 54 98/.17);
+    }
+  }
+
+  /* Baseline grid fÃ¼r Haupt-Container, wird spÃ¤ter Ã¼berschrieben */
+  main {
+    display: grid;
+    gap: 2rem;
+    grid-template-columns: 1fr 1fr;
+    max-width: 950px;
+    margin: auto;
+  }
+
+  /* jetzt mit Variable statt harter Zahl */
+  @media (max-width: var(--bp-md)) {
+    main {
+      grid-template-columns: 1fr;
+    }
+  }
+}
+
+/* 3) Components-Layer: verschachtelte Regeln, moderne Selektoren & Features */
+@layer components {
+  /* 3.1 Gemeinsame Fokus- und Hover-ZustÃ¤nde mit :is() */
+  :is(
+    #auth-submit,
+    button.copy,
+    button.remove,
+    .room-link,
+    ul li
+  ):is(:hover, :focus-visible) {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--accent-bg);
+  }
+
+  /* 3.2 Auth-Screen Styling mit CSS-Logical-Properties */
+  #auth-screen {
+    background: var(--card);
+    padding-block: 3rem 2.5rem;
+    padding-inline: 2.5rem;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    border: 1px solid var(--border);
+    text-align: center;
+    max-width: 400px;
+    width: 90%;
+
+    h2 {
+      font-size: 1.8rem;
+      margin: 0 0 2rem;
+      font-weight: 700;
+      color: var(--accent);
+    }
+  }
+
+  /* 3.3 Input-Felder */
+  #auth-password {
+    width: 100%;
+    padding: 1rem 1.2rem;
+    font-size: 1.1rem;
+    border-radius: 0.8rem;
+    border: 2px solid var(--border);
+    background: var(--card);
+    color: var(--text);
+    margin-bottom: 1.5rem;
+    transition: border-color 0.2s;
+  }
+  #auth-password:focus {
+    border-color: var(--accent);
+    outline: none;
+  }
+
+  /* 3.4 Button-Grundstile */
+  #auth-submit {
+    width: 100%;
+    padding: 1rem 1.5rem;
+    font-size: 1.1rem;
+    font-weight: 600;
+    border: none;
+    border-radius: 0.8rem;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+    transition: background 0.2s;
+    margin-bottom: 1rem;
+  }
+  #auth-submit:hover {
+    background: #1d4ed8;
+  }
+
+  #auth-error {
+    color: var(--danger);
+    background: var(--danger-bg);
+    padding: 0.8rem 1rem;
+    border-radius: 0.6rem;
+    font-size: 0.95rem;
+    margin: 0;
+  }
+
+  /* 3.5 Sektionen, Ãœberschriften & Listen */
+  section {
+    background: var(--card);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 2rem 1.5rem 1.6rem;
+    border: 1px solid var(--border);
+    min-width: 0;
+  }
+
+  h1 {
+    font-size: clamp(1.8rem, 5vw, 2.2rem);
+    font-weight: 800;
+    letter-spacing: -1px;
+    text-align: center;
+    color: var(--accent);
+    margin-block-end: 1.8rem;
+  }
+
+  h2 {
+    font-size: clamp(1.2rem, 3.5vw, 1.28rem);
+    margin-block-end: 1.2rem;
+    font-weight: 700;
+    color: var(--accent);
+  }
+
+  ul {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin: 0;
+    padding: 0;
+
+    li {
+      background: var(--accent-bg);
+      border-radius: .9rem;
+      padding: 1.1rem 1rem .95rem;
+      border: 1.5px solid var(--border);
+      display: flex;
+      gap: 1rem;
+      transition: border .12s, box-shadow .12s;
+    }
+  }
+
+  .room-main {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: .25em;
+  }
+
+  .room-title {
+    font-weight: 600;
+    font-size: 1.07rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text);
+    text-decoration: none;
+
+    &.selected {
+      text-decoration: underline;
+    }
+  }
+
+  .room-link {
+    background: var(--accent-bg);
+    color: var(--accent);
+    border-radius: .45em;
+    font-size: .98em;
+    font-weight: 500;
+    padding: .13em .55em;
+    margin-block-end: .05em;
+    text-decoration: none;
+    display: inline-block;
+  }
+
+  .hash {
+    font-family: ui-monospace, monospace;
+    color: var(--muted);
+    font-size: .94em;
+    word-break: break-all;
+  }
+
+  button {
+    border: none;
+    border-radius: .6em;
+    padding: .37em .9em;
+    font-size: 1.05rem;
+    font-weight: 600;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+    transition: background .13s;
+    box-shadow: 0 2px 8px rgb(37 99 235/.08);
+    max-width: 100%;
+    white-space: nowrap;
+  }
+
+  button.copy {
+    background: transparent;
+    color: var(--accent);
+    font-size: 1.18em;
+    padding: .2em .42em;
+    box-shadow: none;
+  }
+
+  button.remove {
+    background: var(--danger);
+    font-size: 1.12em;
+    padding: .23em .73em;
+    margin-inline-start: .5em;
+  }
+
+  /* 3.6 InputRow mit Parent-Aware-Selektor */
+  .inputRow {
+    display: flex;
+    gap: .7em;
+    margin-block-start: 1.3rem;
+
+    input {
+      flex: 1;
+      padding: .6em 1em;
+      font-size: 1rem;
+      border-radius: .5em;
+      border: 1.5px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+      transition: border .13s;
+      max-width: 100%;
+    }
+
+    /* Rahmen bei invalid */
+    &:has(input:invalid) {
+      border: 2px solid var(--danger);
+      padding: calc(1.3rem - 2px);
+    }
+
+    input:focus {
+      border-color: var(--accent);
+      outline: none;
+    }
+  }
+
+  .copied {
+    color: var(--accent);
+    background: #e0e7ff;
+    border-radius: .5em;
+    padding: .12em .25em;
+    margin-inline-start: .2em;
+    font-size: .96em;
+    animation: fadeout 1.2s linear;
+  }
+
+  /* 3.7 Fluid Grid fÃ¼r Panels */
+  main {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 2rem;
+  }
+
+  /* 3.8 Container-Queries fÃ¼r responsive Layout */
+  @container (max-width: 450px) {
+    ul li {
+      flex-direction: column;
+    }
+  }
+
+  @keyframes fadeout {
+    0%, 90% { opacity: 1; }
+    100%  { opacity: 0; }
+  }
+
+  /* jetzt mit Variable statt harter Zahl */
+  @media (max-width: var(--bp-sm)) {
+    section {
+      padding: 1.2rem .7rem;
+    }
+    .inputRow {
+      flex-direction: column;
+    }
+  }
+}
+
+/* 4) Overrides-Layer fÃ¼r spÃ¤tere Ãœberschreibungen */
+@layer overrides {}
+
+
+--- ./frontend/styles/tokens.css ---
+
+/* ---------- frontend/styles/tokens.css ---------- */
+@layer tokens {
+  :root {
+    /* Farb-Grundwerte (HSL-Tripel) */
+    --clr-primary        : 220 90% 56%;
+    --clr-surface        : 0 0% 100%;
+    --clr-surface-border : 0 0% 0% / .12;
+    --clr-text           : 0 0% 15%;
+
+    /* Radien & Schatten */
+    --radius   : 1rem;
+    --shadow-s : 0 2px 12px rgb(16 30 54 / .08);
+    --shadow-l : 0 8px 24px rgb(0 0 0 / .15);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --clr-primary        : 205 100% 66%;
+      --clr-surface        : 0 0% 10%;
+      --clr-surface-border : 0 0% 100% / .12;
+      --clr-text           : 0 0% 98%;
+      --shadow-l           : 0 8px 24px rgb(0 0 0 / .40);
+    }
+  }
+}
+
+
+--- ./frontend/styles/landing.css ---
+
+/* frontend/styles/landing.css */
+
+/* 1) Layers definieren */
+@layer reset, tokens, base, components, utilities;
+
+/* 1 | Reset */
+@layer reset {
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+  /* Globales Spacing-Reset fÃ¼r Text-Elemente */
+  :where(h1, h2, h3, p, ul, ol, dl, dd, figure, blockquote) {
+    margin: 0;
+    padding: 0;
+  }
+}
+
+/* 2 | Theme-Tokens */
+@layer tokens {
+  :root {
+    /* Farb-Paletten */
+    --accent:        #00bcd4;
+    --bg-start:      #0f2027;
+    --bg-mid:        #203a43;
+    --bg-end:        #2c5364;
+    --card-bg:       rgba(255,255,255,.12);
+    --border:        rgba(255,255,255,.2);
+    --text:          #f8f8f8;
+    /* GrÃ¶ÃŸen-Tokens */
+    --radius:        1.5rem;
+    --shadow:        0 1rem 2rem rgba(0,0,0,.35);
+    /* Breakpoint fÃ¼r Card-Max-Width */
+    --bp-card:       28rem; /* 448px */
+  }
+}
+
+/* 3 | Base */
+@layer base {
+  body {
+    font-family: 'Poppins', system-ui, sans-serif;
+    font-size: 100%;
+    line-height: 1.5;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: linear-gradient(135deg,
+      var(--bg-start),
+      var(--bg-mid),
+      var(--bg-end)
+    );
+    color: var(--text);
+  }
+}
+
+/* 4 | Components */
+@layer components {
+  .card {
+    width: min(100%, var(--bp-card));
+    padding: clamp(2rem, 5vw, 4rem);
+    border-radius: var(--radius);
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    text-align: center;
+    backdrop-filter: blur(8px) saturate(120%);
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+
+    /* Ãœberschrift */
+    h1 {
+      font-size: clamp(2rem, 6vw, 2.75rem);
+      margin-block-end: 1.5rem;
+      font-weight: 600;
+    }
+
+    /* FlieÃŸtext */
+    p {
+      opacity: .9;
+      margin-block-end: 2rem;
+      line-height: 1.5;
+    }
+
+    /* Formular */
+    form {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      label {
+        display: block;
+        text-align: left;
+        font-size: .875rem;
+        opacity: .8;
+      }
+      input {
+        width: 100%;
+        padding: .75rem 1rem;
+        border: 2px solid transparent;
+        border-radius: calc(var(--radius) * .5);
+        font-size: 1rem;
+        transition: border-color .3s, box-shadow .3s;
+        &:focus {
+          outline: none;
+          border-color: var(--accent);
+          box-shadow: 0 0 0 3px rgba(0,188,212,.35);
+        }
+      }
+      button {
+        padding: .75rem 1rem;
+        font-size: 1rem;
+        font-weight: 600;
+        color: #fff;
+        background: var(--accent);
+        border: none;
+        border-radius: calc(var(--radius) * .5);
+        cursor: pointer;
+        transition: transform .2s, box-shadow .2s;
+        &:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 .5rem 1rem rgba(0,188,212,.45);
+        }
+        &:active {
+          transform: none;
+          box-shadow: none;
+        }
+      }
+    }
+
+    /* Footer */
+    footer {
+      margin-block-start: 2rem;
+      font-size: .75rem;
+      opacity: .6;
+    }
+  }
+}
+
+/* 5 | Utilities */
+@layer utilities {
+  .visually-hidden {
+    position: absolute;
+    width: 1px; height: 1px;
+    margin: -1px; padding: 0;
+    border: 0; overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+
+--- ./frontend/img/chat-icon.png ---
+
+‰PNG
+
+   IHDR         Ã¦$È   sBITÛáOà   	pHYs  v  vÚp_   tEXtSoftware www.inkscape.org›î<  »PLTEÿÿÿ                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        mÙÜ   ètRNS 	
+ !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJLMNOQRSTVWXYZ[\]^_`abdefghijklmnopqrsuvxyz|}~€ƒ„…†‡ˆ‹Œ’“”•–—˜™šœ ¡¢¥¦§©ª«¬­®¯°±²³´µ¶·¸¹¼½¾¿ÀÁÂÃÄÆÇÈÉËÌÍÏĞÑÒÓÔÕÖ×ØÙÚÛÜİŞßàáâãäåæçèéêëìíîïğñòóôõö÷øùúûüışdä¢Ş  eIDATxÚíİÿ_ÕÕÀñÏ½|È)‰ÊÌr‚…æ—tkl©sºTòË4[fS—‘6œ¦óŠß6+¿¥–	4¶F£mù=·p¥`Æ0œè ' Ü?cdZ’Èùœ{/vÏy¿^?Ÿûèò>Ï¼—ÏıÜƒã¸/>mvNÁ¾â²s>
+ÁÎ•ï+È™ï¿¤yyç±)Ë›—ÄÍ÷ÙRÎPM«|ËoP¶`vÓ4³Šìî¾'}?s4¹ıé@şíŸZÌM¯xªß¯“1>:6É¯íï[Àèl© ¯öö‡eÖ17{ªËÓÛÿŞ‡š]ê­³ÿC*™˜mUq¿ÿSê™—}ÕOq»ÿK[˜–µ,uµı]v0*[ÛÑE½ÿ=2'{;ØSµÿ÷ñ±Õ•ß×ñş'ğößö_:ÚÿH>ú±¾ı‘ ØÌ|ìoó­÷?ƒéH(ãVû?²‰áH¨idûûß¯šÙÈ¨º_{ûËÍb*mÀ.æ"§]íÜşÃT$uÓMB1§Š¤NÅ|À
+f"«m÷ ßöVÃ€6 r™ˆ´rÛ|û§™H«ùÆomeòÚúåş'62y5&~`­ûG}´ê±QÉ]
+Áº&zlÕGî÷ríõFÕ¸|Då²TÆê¥.s{SOMÔµ‡Lv·¾îùÆkB1Ï»üV×äkÈwµz[/FkJ½¶¹ÚÒüÏWÇ¹¹ÔœÁXM*ÃÍ/öqW×Îu±´~"35«‰n¾İ5÷êR_¯€‰šÖ.\ı"x­zátæi^ÓÕûZûÙ—Æ‡©×­aš&¶F½³ÃZ—-R®ÚÆ0M,lrkµ.+T®Ê,Íl¨rk[WÕúÜLJù)ÿYÇé®¼Â M-Ey5 »ú=`>s4·|õ»ÀGUKf2Fs›©ÚİG,Õ+@<c4·xÕk@–£úØà S4¹ªø”¯Ë¢É-S¾Ã+R¬˜ÃMnb{‹Õ‘ éÑäÒÛ{È9ªX1œ!šÜpÅöuT¤C4¹~Ší­pÎ(V$0D“KPlï                                  € @       € @       € @       € @       € @       € @       € @       € @                                                                    € @       € @       € @       € @       € @       € @       € @       € @                                                                    € @       € @       € @       € @       € @       € @       € @       € @                                                                   ²@ $¨rÊ+îaˆ&wb{ËœbÅŠ‡¢É=¤ØŞbgŸbÅ4†hrÓÛ»Ï)T¬x–!šÜ³Ší-tv)Vlbˆ&·I±½»œŠ§=LÑÜ<§Û»ÑÉT¬ğfŒæ6Xµ»™ÎxÕ’£¹½ ÚİñN’jI‰—9šš·Dµ»IND“jÍãÒÔWímS„ã”ª•E0I3‹P]æõ•¶®Ú¬Zä{ŠQšÙSÊ­İÜºj†rUMfibık”[;£uYoå*ß‘¦i^1GÔ;Ûû³…¥êu;§yíTïkéÕ…/©úr¸hXÛúÒÕ¥£]¬ôíf¦&½ÛÍ®şüjA¥›µ‡¸5È ¹ÙÓÊk×øV»Yì«Éäz€)¿ÿgÖ¸ÚÒÕ×Ö§úÜu<w&¼ú§w¹¡©×rÄå|åëÄ@hïşƒëÊİîæ‘/5Ëç¾ª¢íÙÏ<aGc¾-šØi?Î3ÙÛ‹ª4¶rÖ—¯å>™­	»ı Ş•¾ü†÷tó…ğ½İ].€ù7^5¬–* 4Y*€ê6×÷Ià«'À¢6Ï*²T¬€æ…"”F¶}Zc}r{5J €±_}^¹‚H ÷¦çÕ·^°€Ê¡Â Ô÷½ù‰MÀwiº, í~ã3[² _¶W€ìvŸ™÷-Ñ
+ºŠğÖ-°w+-àÃşB ”t»ÕsK®-àüh j;¸øùp³hM 4?ÜÑ³[ì“İ¦ë,îøéí.`O¼å Twø‡m.àdªÕ 6¨ï€˜×$[@İd{4ÍsóÇÈş]À×’å±@­Ë{àş2k%€İ>Çï
+ğşx·‡Æ7¶
+p6Í: [õ~ÃÍ¸([@ã» \Ô¾Æ•˜'üß…[ /Ñg:á¤lïÄÙàäÿjLf•h§X *Óÿ^¢œ–,àÂóœ^ØÉQs
+Ğüœá Î	ÂÏÉ++äx-Ú\ +ƒõµ'oZÖŞF¡'	 qoVZpïrŒ»<¿DâçDU#ĞT’¿|\']ÌLyäÉùKV®Ùàş­;ĞË3o+€7üşÉÖ¯\2ÿÉGR"ê¨oş]ûÿ© # p?[ÔÉE¼¬- ˜Ç àëOÿ— # €hä9]Á;F  ¡Ğ]ÿÒpe! lê7µßl‹€Ey–kÎ1 •~~IW@P @È4Xû3`# €Ğ©ç~í—•^ XT¤şÍ¯# €ê×Wt|Ğ 6õÓ]çGÀ¦Óş¼5 6ÕíÏÚo9F  !—wµ¶€  @ö‹ËÚ·Ú§À¦†¢+Àïc ’õyOW@Ë‹ XT—ÚovÇÀ¦kŸ‘ç×1 ÙÆª+ÀŸc ºİ«}6Nãl ØT\‘öá °¨ğõÚt @h÷Ë]'î€Mığ?{Œ  B½¾ÿìÔc òÅ¼¡ıF`g4 ,Êób‹®€÷ú À¦&ÕuÚ1 0¢ïjŸ‘çö ˜Q¼şyÉ9a °¨ˆW´v€M=­}Œ@I lj”ö15c`Sw }Œ@& lªë‚~Œ  Ìº&´"ØÇ À°¦i#P1 65Dÿi °©„Á<F  æµ-ˆÇ ÀÄ2õ¸ 656hÇ ÀÌ’J´x 6Õ­PûÀ+ °¨°œ #  s›Œc `p#´ÿbİ$ ØTŸÃ#  £‹Şè1 0¼ç<F  ¦7áB@Ç ÀøR:F  æ÷N Ç À‚Â7h(Š€MÍÖş[Ê× €¥Õ>F`< lêNí¿İ¼ 6»Û¯c `M, €EMÖ>Fà“ °©Tıc>€MÅïñ9 ˜UÄ& /£	 ²} ²ëÿ! d×õ 7 Â›~	 ²Z	 Ùõ:  ÙE½
+ á-l€ìÆÕ@vÉ¥ ]÷· »°µ Ş— »ïW@v‰‡ »è×  ¼%- İÄ İ  »€ìÂ áÍm€ì~T Ùõ+€ìbó  ;Ïo[  »)õ İı§  »oí€ì"7@xó¯ @v?ù/ d÷£ İ7ş ÙyW@x3ş Ù; Ùõ: ÙuÙ áı¦ ²ûY- d7ğ8 d×ı/ ]Ø: oV d÷ƒ3 İ·ÿ ÙÅ¼ á-m€ìÒ/@vƒÊ  »€ìÂ7@x¿j€ì~\ Ùİu ²»# ²ó,€ğ¦Ö@vß+€ìzî€ì"· @xİŞÿŞÿÉ^ŞgÄ/     IEND®B`‚
+
+--- ./frontend/img/admin-icon.png ---
+
+‰PNG
+
+   IHDR         ôxÔú   gAMA  ±üa   sRGB ®Îé    cHRM  z&  €„  ú   €è  u0  ê`  :˜  pœºQ<    IDATxœíİ	üoSõÿñUÈL¦"’©HJB!*šCJiB¥9¢„Û ¤’4II(CTT4S¦•2•2f“©Òÿ¿ßí{İ®ïıŞÏçóİkí³Ïçõ|<Ö£<\œµ?çìsÎ>{¯m                                                           €qµ`ŠåS¬“bË¯J±óôxWŠ=¦Ç~)>6Ó_¿s¦?·]Šç¥X;År)Í   üG¤X1ÅsS¼!ÅGR•âÌ×¥¸?ÅÿsŠ{S\“â)L1-ÅëRllù!  °HŠ§[¾É’â')n3¿üTãî¿¶ü@¢‘†g§X¨x«  Ğ3K±å›½n¤Yı›z‰ø³å‡}ZX£Xk Ğ(}§ß%ÅI)n²ú7ê¨¸>Å±–?a,3åV  ãæ¶<,~€å7ü[ı›qâ’ém²yŠGÜº  tÈ\–oú‡¥¸Ëêßl»wXş\ğ¢óŒĞŞ  T£7ı-R|5ÅíVÿ¦ÚjÜœâó)6IñÈ¡~  -ky=½–ÊÕ¾yö-4o@Ÿ	Vø×  À‘†øõíú„ÿ²ú7Ê¾‡VFh9¤VKÌ=Àï @QK¤øPŠ­şMq\C#-»Y®—  €«•,¯Óÿ»Õ¿9ş6ı7Y~’ß €‘¬—âDëOq>Æ?R“bÍÙü†  L•ëô}Ÿ5ûíÄCÓ³Õ&ø= ˜Ôê–×£3±¯İ˜ñ °² 0ªÇ¤qãïSèÓ€ê	,i  ÌB%hµƒ&”Õ¾a>q§å:” ü‡ÊÎjÇºÚ7("&®H±µ ÆÖª)N·ú7$¢Nœb,€±¢
+rîg-?q¯åÏªè è±§§øÕ¿ñt!49É9ÎNñd ôÎ¼)LñO«³)Êé*ËŸ3H±OŠ·¥Ø.ÅsS¬ey£¢Å¦ÇD1Óß|Š§ZŞãàU)vM1-Å×Sü"ÅµÖÏ‚HX.ïÌh  ô„ŞìúğÖ¯·õË-¯m×êÅ–K×ØG3éWIñrË'¥¸Òúñ`pVŠK5  Şjõ&|ŸÕ¿©Œw¥8ÕòÍş9),Ú:>Nñ<ËÚµï«ß£¶ıkÊ6  ÂcR|ÏêßH†	}“ÿyŠ÷[‚dñV‰§Ñ‰uSìeù;{ks´·À¢Å[ àbƒ×[ı›Ç q{Š¯XJ‡mm·<7áèw[ıö$ş”â) (gçZı›Æd¡¥gú¯Dã\•n>Ëm =º^ñş¯wi À”Ìo¹†íÅìB“ã~œbË7>ü/ÍoxmŠ_Zıßj²8ØêLº L@ÕÜ.´ú7‡‰â†ûY­Á<)Å§RÜjõ¿‰BK!—rË 0öÑM¶öMaÖ¸Èò,òyüRï=ÕnxsŠK­şï9khïˆÕüR LfKëŞD2­!×wíG8æ=nÔ–*JÔµUwX^	 ¤êt]YRöïßµ¼t¾i¹¾@íß|F¨zà«]3 ü‡Ş²úÿŒ8-Åz®c"[w&êpOßt`¼©0ÎaV¿ÃWœ—âÙ¾éb úô{«>(öwÎ Æ’6hùšÕïä5áPµúP¥¯/ô[¼.ÅÍVÿüø‚qn @1*–s¢ÕíØõ­WËùrÎ£S•ÁC¬ş_5v€)ÓR°ï[İ]3ûW÷NÅ¬cyfÍsæ›ÆC  ŒL¨JæÖêÄU²wcH·EªÖ÷®·zçJsî Àtó×[T­Îû‡)–sÏŞV±<‚Së<ú¼Q ¦³Öl}ëç­¿_ô0©ßTÛ-×8§öO úáP«ÓQk9ÙZù¡R	ßçÖ>ù@Ó>`u:è/»ôƒERguÎ±7ä MÒV¹Ú67²SÖ?óøQ-‡èOZ¸eDr ĞUÕ»ßb;äëR¬‘:i£7Zì9÷7cÏ ø?«¦¸Íb;â3R,ºíñ).´øÏe#’€.{tŠ?Zl|ŒåC€¨ºcôVÃzè˜?"9 è"-µ‹®òwˆ±Ä§¥‚Ñ«O	É :h_‹ël5ë1i¡a»YŞŞ7ê¼Ü5&- è-RüËb:ÙS¼2&-ôÀ·¡V"l“ Ô÷ÄwXL{_ŠÆ¤…ÙŞâ–	ş5ÅÒ1i@=Ú¤åWÓ±j#˜ÍcÒBmeqKSlÌMĞsû[L‡ªü6Ê	ıµµÅ¼7(' §oßıõÍŸa”òr‹™ ª”kå a´ŞÿjóïDõ€±MLJ#¯³˜2Õ—¦X (' q¼ùwê ·JcGKö¼ÏaÅç£ oZ‚Ñqî•ÆÖæ«ÁfQ	€—ES\oşæáQ	a¬=Âr?ïóYå±) iG˜gyªåå…@„ùRœeşçõşQ	@iÆô.«ú{Ë›¹ ‘´“äUæ{nkå« 4G3™¯4ßòÎ«D%Ìbó/ôkË@3¦™oÇ¨‘…—G%Ì†öğ<ÏoË ¦èñ–ËğzvŠÓ¢’æàæ{®ßb‰°l `
+¾i¾âOºéèG¥¸Ğ|ÏùÏ„e #ÚÀ|'şiÁåÃ²³rŠ{Ìï¼×„À5Ã²€!é­üó}â»?ºjgó=÷O‹K †³ùv€ûA×`¾×ÀsãR€Áh©Òeæ×ñ]e¬÷G÷©>À-æwœ—
+ fGó}óÙ2.`J^c¾×ÂâR€ÉÍc¾EË(ãdó»Tèq© ÀìyN~º5ÅRq© Eh¥ÊßÌïºxi\* 01mÂs•ùut¯‰K(êİæw]\˜ Lh{óëäÎ1†:Ñ.=k³*¯ëcó¸T àáÎ3ŸÎí¡ëæxĞMÚë€º  ªÑšd¯ÎíˆÀ< Oß3¿ë„í‚TáÕ±©¤ê2y VMñó¹VŒK ²ÕÍ¯æÿÇó "|Ù|®•S<.0 °ƒÍ§C»+Åây ´,ğó¹f>˜€17¯ù•;İ'0 ÒçÌçš¹Ær)n pçUêô¶‹æDÒ¼–{ÍçÚÙ"0 cìãíÅ¡æsíœ™€ñ´šùLşÓ›Ñ’y 5<!Å?­üõ£U¬œàjóyƒùbd@E'˜Ï5ôŞÈ$ Œ]ÿTõoõÈ$€ŠÖ3Ÿ€ó"“ 0^Tš×£ãúnd@üÒÊ_Gú4·Rd ÆÇ§Ìçàù‘I àµ’fÏÈ$ ŒíÊwµ•ï°®5Ö0cüÌ—âv+=ı&2	 ãáYæóÆ²wd@‡b>×Ôj‘I è¿OXùJË¡–Lè5Íç`÷È$ ôßÅV¾£úAh@÷œoå¯«Ÿ‡f  ×o>Å^™ĞAï³ò×•Š-™€şÚÉÊwRÚN
+ãn9óy¸~id úëÛV¾ƒúNh@wmå¯¯ÃB3 ĞKó¤¸ÛÊwPÛG&tØ;­üõuMh zéV¾sâ%ğ_úPúS<!2	 ı£FJwL§‡f tß%Vş:c’-€)9ÉÊwLïÍ è¾OZùëìK¡ è¬|Çô”Ğ€îÛÌÊ_gÍ @¯<ÑÊwJ×YŞW ÀÍ›â+{­i›íÅ#“ Ğú†Xúà˜Ğ€vüÈÊ_o[…f  7>må;¤·„f ´c+½}(4 ½ñS+ß!ñı˜Ø¦Vşz;>4 ½q³•íŒîJ1Wh@;´\#£ä5wYh zai+ÿ6rZh@{.°²×Ü¿RÌš€æmiå >šĞ­İ/}İ­š€æífå;¢íB3 Ú³«•¿îŞš€æy¼‰¬šĞŒ‘7 ••^“|Ÿ1˜m’õo+{í}#4 Í»ÂÊvBÆ>Ğ¬«­ìµwNèÑhšJõŞoe;¡cC3 ÚUºşÆ±‡ eËZÙH±h@»·²×>),š€f=ÛÊ? ìšĞ®ZùëïÉ¡ hÖ6V¾Ú"4 ]¯¶ò×ß¦¡ h–ŞÖKw@«†f ´k+ımš€fi±ÒĞ‚¡ íZÁÊ_oÍ @³¶²Ïı±‡4m!+ÿ °wh šu´•í|®‹=| y¥—á~&öğ´êT+Ûùü6öğæ]oe¯Á£c@«Î´²ÏÏbhšK^ƒ'Ç>€Vge;ŸïÄ>Ğ¼_ZÙkğ‡±‡ U¥ß>‹=| y¥Ëÿ<öğ´ê2+Ûù{ø@ó~`e¯Á³c@«şle;ŸÃchŞ·­ì5xAìáh•–í•ì|>{ø@óôÙ¬ä5xqìáh•¶-Ùù|6öğæ•®ÅqiìáhUé5È_Œ=| yÇ[ÙkZ rµ•í|¾zô@û¾ke¯Áóc@«®´²UÈ€áœfe¯Á3c@«J/<!öğæ©zfÉk:  r‘•í|N‰=| yZ·_ò<-öğ´êcø¨I³öK^ƒß=| ­ú•í|X‚ç+{{ø Zõ+ÛùÜ{ø@Ó™â_Vö<(4 Íú‚•í|Ô™=24 ]‹[ÙëOñĞ 4kš•ï€–ˆL hØªVşúÛ94 Íz›•ï€šĞ®Í¬üõ÷ŠĞ 4KEéè¥¡ íz“•¿ş™ €vmdå; w‡f ´ëcVşú[94 ÍZÉÊw@Ÿ	Í hWéU8¥˜74 ÍšÇÊ/C:94 ]¥« ^{ø Zw•í„ş{ø@³î°²×ŞY±‡ u¿°òÃ…f ´gy+{İ)	Í @ó¾få;¢g„f ´ç…VşºÛ/4 ÍÛÃÊwD;…f ´GûJ_w;„f  y/¶òÑ¡¡ íù¦•¿îÖÍ @óV±òÑ¯B3 Ús¥•½æş™b¾Ğ 4o®÷[ÙÎè)ˆLhÈÒVş¡û²Ğ ôÆV¾CÚ$4 ÛXùëí[¡ èÃ¬|‡´Wh@;¶ò×Û¾¡ èm!ZºC:54 #n/Í @o¬kå;¤¿uÉY-nåËoÿ;Åb‘I èG¥¸ÏÊ?l™Ğ€í­üuvIh z§tI`Å'C3 ºï(+}94 ½£2¢¼™ ~™â&+½!2	 ı£ID¥;&ÅŠ9 ]¶ù\c«E& µ\M¬tçô¾È$€;ÀÊ__×†f  ·Î¶òÔù¡ İôˆWYùëëğÈ$ ô×4ó¢\90 ‹i>×Ö¶‘I è¯g™O'õÈ$€ò¨ş§zKD& ¿æNq‡•ï¨.Lèm¸u½•¿®Î‹L@ÿm>£ ëG&tÈÍçšÚ72	 ı÷Jóé¬˜¬„qõó¹¦ÖˆL@ÿ-”â~+ßYİ“b‘À<€.X:Å?¬üõtyd ÆÇ÷ÌçeçÈ$€ĞXké£‘I ;˜O§õ;Ëë¡q IµW™ÏµôÔÀ< Œ}¸×|:®-ó jz•ù\CŒLÀø9Î|:¯E&Tt¡ù\CûD&`ü¼Ø|:¯§X+0 †MÍçúy(Å
+y Có¤¸Ñ|:±£ó j8Í|®G&`|yì^¦P	ÓÕó "iÛ_ty\;Ûæ`Œ­j~Ù7ó "ıÄ|®™»RÌ˜€1wºùtfú–¹f`@„ÍçzQ|60 °W˜_‡vb`@„3ÌçZÑHÜjqi @ŞÉìjóëÔ6Ëğµµù=,Ÿ˜ üŸİÍ¯cÓZéGÆ¥¸xTŠ+Ìï:yn\* ğ_‹YŞÌÇ«sÛ1.ÀÅnæw}ü60 x˜O™_wCŠ…ãRŠz¬åú^×ÇëÃ2€	,›âóëä>—
+PÔ×Ìïº¸ÊrQ. ¨êpóëèş™âéq© E<Çüje(v
+Ë &±²åµWgw‘å-T,âJó»®¶<¹ :á+æ×á)Ş—
+0%™ïµ°K\* 0gË›ï\€û,— ºLõş=GÃ®1ŞştJ’z¾ù¨6 ºjÁ—›ï5°cX6 0„Ç˜ï²'ÅaÙ Ãñşö£8€{ùv‚Ú,hÓ°l€Á¼Ì|Ï{ÅæaÙ À´6ùóí¯K±dTBÀhşËíæ{Î?, ˜½¡{¿ıÌò†D@Mó¥8ß|Ïõ¥X#*! ˜ª“Ìÿ!`ÿ°l€‰y÷W|:, (`¹÷šoÇ¨JkÛD%Ìbgó¿ùk?ŒE£€R¦™ù·kåÌğ,ó­{1#^• ”4Š?™'©â(Ëå¨ôõ­æ^/*! ğ°¡åILŞ¥Š-”Æ×)®0ÿóùï)VÊ	 Ü¨xw‡©8ÕØ4~T…òçs.ï” ¸š7ÅÅÓq~5Å#bÒÂÑƒå·-æş±qè‘§¦xĞb:ĞCƒrÂxĞÍ8b¹ŸâNË+h  Wö²˜NTÁÚi” ›ÿ-î¼İ>&- ˆ¥aÔs-®3İ+&-ôØ§,î|=.(' ¨bóß1pæøHLZè½ùëSRÔyªå²üĞ{/²¼«_Tçú9cR§=&4™4êü¼?Å:!™@èÍ<ªƒU|ÙØKs¦İ,O°ØssçÌ  #t3şÅv´ß²\˜È")~d±çä1!™@Ç,–âJ‹ípÏI±TDrhŠ–ŞıÎbÏEı÷¨^	`l=ÅrÙÓÈ÷Ï)VHMĞ9x­ÅƒÚK`¥ˆä  Ë´ö9²óUÜ–b³ˆäĞi/³¼£dä¹§ID$ -øÅ?h“¢iÆäÀq¤™şÓ,v5Šâß)vğO Ú¹îzæ81ÅÂù¡–´\o¿Æ¹ö±€ü  9zW5´óe–÷+@¿=+ÅÕVçc£* ˜„¶\ı‰Õé Hñ£“î#•¡–âŸVçÜúõc«j-•T5OÍaPA¯7¤ØÃò–ßŠÏ§8ÌòæI'ÌGOÿ{ŠOLÿóû¦x{ŠW¥Ø4ÅZ)g¹ 0†4ÿk«ÓQ+´|÷,å	)Î¶zçÓé)æsÏ²ŒG[®J¸MŠ=-Ğú™åQ“¨İ<g„vFÔRI=<is¯w¤Ø*Å“¬ö0‚Ç¤ø£Õë´µLë5îYÂ“FrvIq·Õ;.²üÖÜEz0z…åy	*Êu£Õk§Qâ/)¾mydG«9XV	ôÈò–7I©ÙÉü`úq -«¥ø…Õ=w~kyÂamzÒ°½†Ù²üF¯·ëÚ7pĞFc¿´ü)â­)cİø Œ@ß/±ºŠÖ‰kø‘å‚İ§Zş´¼Ö¾æ9£7ÿ%œs“uSüÜbwßìjÜ2½-^<¥nñç[ıNDúÆÎ¹bt›§øƒuã<©}ó—£¬~[t-ÎšR‹¨B““TÇ¿v¢øåï§èoë7©}^(4yuqßt²`Š{¬~{t-Tˆ‰khVÔş®;#îK±¿u£³WK§8$Å?¬şù ø©ugÂßë­~{t5>8z³¨i«WÅm¢Ğ÷Õ}­;ÿ8Ğ¤.­#¿×êÿş3âXëÖÚu}ï®İ&]?L¡]T¦VUÕjw$3Çí–ß,uÌ{Üig-Y‹Ş¼gNq°uk‚è
+¿ÇAkAÕO q»Y÷::İœ>e,,iå_°üÙ¥öï;sè{òîyjo«ß6]Gn] ¡r¤]{#Tè»ô1)ÖóK½÷6Jq’uï!O¡	v/÷K}dZó_»vFq­ukÔÀˆ’â*«ß©Ì.TÇ@õÒ»°4¬ë´ÚcgË%`kÿn“İ<îÕ S´¡ÕoŸVb£Û@Ç<ÖêÖ{$4iíÈ›YŞ™æt¨Æ»v‚Ô†Lµ§Éâtëve9Õî¯İF­Ä—Flc ¤B´ÓXíe¸Ér¹RÇ¡H= may×8M ¬ı{Ÿµ\i°«æ7ªş·Y·Vn (@;™µTëüË7ÂWZ¿WèÈö–+Ô©4kív4t.½Â¡=JS­ÿÚmÕZ¼h¤–Ği+Zw*Ú¯^Åö²ü²åmOUN{¼OKqnŠYıö6Î³v*ÇfõÛ«µ8v¤–Ğys§ØÏº9‹|ĞĞìšÛ Â73¶<}DÉF*DŸ1T’W£/Z¯½ô0S»ıF-ñÓrÎV†ˆµiV‹XµCór¡½4Bo¡µúM©Ğ²G=hÓÛS¼0Å“-ö¦·ú5-¾;Åá–ß’ÿ^0¿ÚqMŠç•j° ï·˜¶ÑC†®%=àlù<Àò*—]RlgùAuó™B»n:Ó_¿ÄòƒâÎÓûã–çÃhÉ§Fí®³ØòÎ;ŒĞŞ ¢*rše^ûæâ7Zn?%Å×R|2Å–;Ûm-w¼ÚuóYbF§¼İô?«ª†z>ÒòF;ºÉßÜü<CoıšEßbYg]UrûÓ)ŞjùQq«¹ƒòÑ(—F56I±“å°ï˜ÏhŞ©A9¨LoËWYı›Ñ­ĞDÌV'„é»t{¨˜P?5yìq OUL@=ÆÖÛmËß¨‰2¡!m-ïkñ­†C­|»|(4ƒÁi4Àã<Ø52	 õiCm×¾	uâ‚ë[Û4IñV+Û.fïê^‹Y[ú\8+2	 İ ošïµ\Û½ö‰ˆ	Õ x£usˆ{XšpWº}~šÁğ4¿¥tÎšÿÑÊrO …-â‹Æg>‡ÊëÓÏâÖßµòíÔõYñ¯6Ÿóãƒ‘I èUSœ`ù ö‹(MÿMW²~QeÅÒÃáw§X 2‰hÇ²ÓK#“ Ğ]ú6|ºÕ¿ySg¯mıô.+ß^‡‡f0:Uğó8_ÖŠL@·iÍ¼ŞjßÈˆÁC£7ª]°Á¿gŸ\håÛîÙ¡ŒNu+<Î#“ ĞMšm¬Â8Ú¸FÃ¢µojÄœCCıºñ¯;ÁïÙ7kXùöëêÚÿ‰hõƒÇ.’×ÚxîÎ	Œ½R¼3ÅÏŒÉ€-Å}–wS\ıá?iodåÛ±«kÿgG¿¹Çù´qd êÑÄ0u|Yı1\ü9ÅnÖ¯YıƒĞÒUU.,Ù–]^û?;*Oìq^})2	 ±–Lñ6Ëê0Û¿­På¾¤ØÊÆw¨Vå¬K·k××şOd.Ë{_”n‹Û¬] `>ËµŞµÌ£’á—¤˜–bEÃñV¾}»¾öv1Ÿó­Õ}! Ìäé–wxÓºµobÄp¡mgU¸ç©ûUÇ×£SÜoeÛ¹…µÿ³£•çŞ±‘I (GoûšÁ¯aÍÚ71b¸Ğw}½Õi9Ú¸ñOf+ßæ­¬ıŸ­^(İ&÷¦X(2	 S£7Å/ËöZ
+½ÍjÕÅî)VyøOŠYœcåƒVÖşÏÎÇÍçÜlõ³064HoûçZı›1çĞòJİÄ>–bSË£5ŒÊT—´ÚÒÚÿÙyŠùœ«§F&`p{GŠ¿Xı›1ûĞï£IkzÃNŠ…'ø-1=4•ş}Z[û?;°òm£‡Õ¥"“ 0¹e,ùyT#F›Sœ‘â0ËÛ+oay¹%ÊĞ|ˆk¬ìoÖâÚÿÙÙË|Îë]#“ 01Uy;Âò–®µovãZwGŠ+Rü2Å7R|2Å»Sl›â™–Ë&Ã—>—”şm[\û?;O4Ÿš¿LÀÿZ-Å1–oDµo†]»,Óı•åb9_OñiËoG{¤xkŠS¼Ùò¼	…Ö;o>ShD=l=Îò¶«èíqPú|éÛ$·óÌçºÚ(2	 Üøg[S\`¹Ñ',ßÌ_`yS˜¥SÌ3Z3£Ú‘²ôùÔòÚÿÙÑ¨”ÇµwZdÀ8ÓÿhÏÿ?R\ly˜]oìêø5Ã™‰sãk‰W[ùsí+9DÑ¨•æ5x\›;æŒåRiãsã¿)Å-ïêöÚkõÇKx¼å›Û–÷Œ×·áV
+iTçtó9ÿZ_û?;^Å¿îL±r`ÀXXÄò¬~méZû¦ìz¨ùMŠCSloùaåéæ¥=¼ıun]hydIYéúƒvüÓ'0óñÖşÚÿÙyµù]ÇWY>ÇZ¤Ò*‹®y?ºTÛ¨Fo7Zbs‹Õ¿A—{RüÔòæ5ZÇ¾¿Ùİü'‹®>¨Æ…¾;{ŸïK%œ
+KiÕŠWÛ]nİ¬X©sVK:Ÿ“âM)öKq\ŠómöK¦5¯ˆ‡ „{™åeeµoÔ¥BËt#Q¡–-¿½!Î(7ÿ®>¬k>Emf„æ™<6 š4ßë]«m^–ÍÍŸbMËçã{,(ªZ¡JF]ÍC Âèä=Ãêß°K„Ş2Táîõ–gá£òØf¢ğ|0PZİñOç*p¬]÷˜7ßvÔCÿ‰–Ë3—¤‡3íp¨%šûX^Ê{fŠsá! ®4®â1zû¨}ãJhÔBCkzËŸ«haiÑFBµÏ‹Qô^oüÚıĞû†¥ĞÃÅ¸LdÓÃTÄo¯>Ms5^hƒ-ÅÕŸÑ'„-S¼Ír¿øí¿³üé°Ö9¬‡€Õ8~`(ªw½Õï¤GÕ²? ÅÓJ7¦ì3Vÿü˜,f~0Ğç¡İ,Ï{Ñù¤ï³>¯ÖÌMZ4ÅÛ¾·Y^…÷(BA    IDATğ9ËËxõ0¨ßZî4'è*ëö*'}Jxô(ÌJo™<ã:ûïô}-İ:-¬}´únı¸‘Zº]+úZšÌè&F6oŠ¤xĞêŸÌÃ„*£}ÑòM¿ö,pLn½÷[ıs¦¥xãH-İ¾ï[ı¶o-©¥1öô=ó÷Vÿ&ÎµÜ9R÷¾‹[ù]ñú‰×‘,M®lùd­xí(ñ¤·~óñÁ\*TÕKKhÖòh¸ÑMì»Vÿüi)ô°4îÛ2k3ŸÖ' G‡æ¯<e”ÆÆxÑîq—Xıv8;Åë,¯§E{ŞeõÏ¡–BŸIÖ©¥ûçæ³]pŸã2ËE©€‡QÅ-Üèò¬Öÿ7ıø¾eyßz´KŸ—Z›WR34÷’‘Zº¿ö¶ú¿Kk1u#0$ôÑ®uµOÎÉBëª5ÌÿD§6@íQ²Ò_ßCoº¯©¥ûOu<jÿ>­Å¸N Å,ôVÅ+º¼qvÙÛËò6ªè‡#¬şyÕJè[7¸&÷«ÿ;µ÷/RcO‰N±ú'ãìB{ŞlyB"úãEVÿÜj%4êõ‚Ñšyìh„„¥¤ƒÇOFkfôÁæ_µlĞPÑ·Ø`e8Ñ=tFWsk5´Å/õÜ‡£y%×Zıß®•`diÌ¨Öº&ú=dõO¾YC7Í
+ŸÏ-{Ô¦Í–jŸg-„&¹.2b;Õ•ø¦Õÿ[í0îKJÇ†v¸û…Õ?é&:	µŸù~©£¶³úçZ×ãæ¯µñ?¶1ß÷úGØ¾hˆv»ëÚ¿vÊÒö˜;ænĞ†$šÌéu.]e¹6~íszÔĞ¿Ã,¿½¢­y×¦M]ä\;´ÂdQİ÷NëVÕ,pZ‹:n™Œ³/˜ßùt¾ı÷³Ñ²)6KñöéÿMm-Üå9úw¬åídáGç…¶éı›ÕÿÍ‡‰ÛSü9à¿sÚèM‹®R-üoXı“xæPşgx&ÎQå:¯9'2_n€cĞ„
+Giı³ö•×†2ªCP«è•F+¶¼Ã&â,–â}Öš'Z±p…å‡Ô#S|Øòª§-S<Ùş»—‰æmp<Ø¦è ­ñìÂI>#´yÇ6¾˜Œ+mCz‘ùœSºyo2ÅãÓÈfÚk~Â4Ë“—â‡ãÕÚëSlolTÕk[ş<p•@Õ¹©>O¥Ê³<ú ‘Ø—¦xzŠÇy¬zP¼§ğ1Î§yLè(m”¡‰uµoú
+}{û¨Ñá+uz^çÖÇ[.êtU³@TU¸èW–‡d=>}zĞZëi–?K0Éµ»–JñbËs’N²üòt‹Mü»êsª~ÛßZ¾i~.Å)^cyëñÌg	ó›fs<¥BŸfŸìpÜ¤bo/£„†¶¨65¾4¡íó9·4ªğ¨¸Tş‡>'è-î…–gš¿Şò§…WZ®¯ñ4cbk_è[l¦¨½4óÛæÛg—
+JÒĞº†³jßôêôßd÷»O›Ïù¥„ÖÌè
+­Ù÷\ÚÈŠ€i+Ü¬ş_¡oœËø¦‹¬d~;ı}$0 k4òäÙ‡ÿ0.L•Šûœgõoüz*}™s®h‡WÅ?•Ç¥R$Æ^´<ûóç„e‚‘éûzÄÑÉBCF‡[ş.
+ˆ–Ûé¼ğ8ß˜ĞUZúª¢¼úõ3Â2ÁH´„¥v­ÁŞÚ;Q4G3ß=Î·“#“ :N+<û÷õâRÁ06¶úeOlTòÃÃéíßã|ÓÒ«Uó ºNe=_KƒÒZÕšu­U½êÆLìæsŞ™Ğ•¼öêëµ?Å
+q©`Nv´ü£Ôºù«8ÆšîY¢UZïñí_Ğ†­œŒÕ)ĞÄX¯>ÿÓq©`2ï2¿‰Us
+ıw?cÌ¾Æä¾c>çß~‘I Qya¯¾_›'Õ.~4öŞkunüŠ»-Ÿ`Àdd>¨wZ®À`öN7¿{ÀÛóÀ,´sU­›ÿåFmhÆk»ß½#“ ¥Ua^;n^jÌùªb7«wó×’«EıSDhˆP#E¥ÏÁ[áG`P_3¿ûÁ¦y ÙİêÜøµåÆ÷ó9w‹Lhœ–e{:)0±÷A«só×ö—<éaLñ'+.ŞdlŸË«8VŸ-˜ÇØª5ì¯íUù1,¯IvLè‰-?<{\“Ìc,½Îê,õû‘ñ­£ù–•?oK±pd@x­Óñ¼yŒ-µ«QäGùÌúG“D=ªRî™Ğ3ª×r½ùÜ/^˜ÇØĞgXì_KFfÅT¼ÙÊŸ—·oÿ] IÀ+Xî›vMñáŸLqXŠã,oG{Âô¿Vµ8«XÙ,ïR:Wü!c&^%‚ÏLbhó•:¼ùë­í•É¡×~aåÏÍ…f€TjyÛ_Lñ[›úÈÎƒ).±¼4MŸ6™_KCõ×šÏıcíÀ<zMuõõÆyó×wœ"’C¯­h>óU˜Ã¸{JŠO¤øƒÅÌ=Òj‘ÏıO”]Ìçwürd}µ¬ù}§™]\bå€ÜĞªĞçõ€ºR`ãfiË“Äô–Ù÷ÌÚÀFKÖà›îX[Ãü6çbÒøhçßXì÷ãbCZû•ù«—õÿK[Ñò–Ê5·Ÿ(4é{)ÖuË|<-â
+óûİv‰K¥_49æû{‘ıŞò“?P‚&zyŸ³?I1OTB=¦½<±ºÛˆzSÕƒÀ3|ša¬h‹à3Ì÷÷º(*™¾9Ôb/¬S,’Æ…×¶¿³ÆW£ê!„™fy2^í›û°G¥xlñZ™ñ[1j3¤w[ìÅt–±¡ÊR½ñÈ·IöŞ«RüÕêßÌ§ÚZËYN8œXÜoôÎ œzá%æ·]ãDñSËo@I¯°Ø®™—†dÖ¾%,£×¾y—Œs,×#ÀœiiwÔ=æ‡ÆÃÙÀÖ2¿]š&ŠÓ,WƒJS˜£-ö& kgˆäöló[÷];î0çd}‹›àyyŠGÇ¤Õ>Íf¾Òâ.–3RÌ‘Æ–.e±7-™}|DrÑ™J'w}’ßTCs>cLÈò)n´˜ßAc«Æ¤Õ>-—úÅ]$ê”)£ŠZUıÆ©™ÇE$×ÁFMøêJhu}Ü©-¢j:üËò
+ ècwaüÎòÚO ÊÓ,öÓ–BÔ|{Ì¥^=vbl!Î3V6‰®ƒS,®İß“V?hÒ_ÔÖ¾—¦X*&-à¨~|ôÖŸ
+É¬»T…Íc†–Bû,;Õ†lÜg-®½Ê©ôä.‹ùa®±ü¨E;ÅEß Ş’Y÷¨ÈË­ş¸¡‡€qõÜÉâÚùLËç o”z#øa®³\â¨IÑ¢‡£5éíyÉuˆ†|µoío—BÛÓ.0•Fm¾Ãë{|DûşÙøÜ2”#-æ‡ù[Š§Æ¤Ì‘Vœo±ÿİ–w´‘C¾-…J«Ï=…vm‰J;G.ë3N××”é{hÄó[åJU£w¸¼ÊÆ£l¬&`Õ¾Ñv9½i›¡•7W[L{ª Ğ‹B²ê‰'Z~#‰øqŞ”0,íõş€Åvşyèó0°
+‰İoõo²]MD}É¨Ü °kqí¹{LZı âQ…Q>”0ª×ZüàËsúFsŠTy­ö¶…P‘šFkæNÓyıM‹kÇ£bÒêO[Ì£“ úç@‹¿|8$³XÚÊ·öuF¨Ô¬&…]œâ×–Ğè¯£F>‰_Z.ÀÖ'ûY\ûiï…ycÒê‡­,f´Nl~´BpôÆ4º_‘\­r¨u#ÕgœÓSì›bóËÙä/ú>½IŠ=,ïE] jæØiÎMÛŒ-®İTÙsé˜´úAÅwn6ÿæO6¾ë]Ñ.¬ùƒÅß¸6ŒHÎ™ö¯°ø›§Ş w¶¼‡ÉTh'ÒRüÈâEİfıXº¶IŠ-¦ÍôÀö´˜´ú#bí³~–b U+¥¸Õbo 7Xû+ö²Ø6S‰åg;å¢åÊú|¹úáN¹DYÅòƒLD[éí1iõÇvóãl•àdËKW#ohÚ4¦ÕoÁËXÜÖ®L±eLZöËs"òÒÃF«o´šñ¯yQ×Ê>1iõ‡Ş."ŞjJp¦aåÈ Ån!™•§5íís¨ÅÏ+ÒCÙ‡,¦’İ·‚r*í+woL,ÚwÌÿ‡ÑfãRİ
+ã!º’İ=ÖŞ>šë£
+lí¢ÏŠ/Jh66Nq‹ùæ©Q€'E%Tˆ~—¨ëC£1}®ŸáB[¼USkı&0+=ĞFodóíÌÊÙ×|ÛãöÏËfrÚ4í*óÍ÷ëaÙL&Nj&~Äu¡y2I«?ômNç£YŸD%ÓìòèÙíë‡d6u÷œø¥B9]›P¬›ĞÕæ—³æ<.*™)Úßb®U•|FPN½¢jcŞ?ÎÛÃ²êX-Å÷ ğı˜´¦L3±½Ú@“
+»º<RçƒçœªÊÚjIù½æ-ô­VF˜ç›ÿ£Â)LÈÀ8ĞfVÚÒ7ê! …3¿k~ù¿.0Qlj~Ë˜Ç¨¢ªıí•PŸhY†J^zş07¦xLTB@¼Ëâ >”Ó¨T¸Æ«èË×ó˜
+•röúı»ü ¨oÿ[ülí.­Jğxş0–y~X6@w¨`KÄ€>9tyÆ³vøôÈ[“½	Ìc*4IToëíp``ÃÒ¼÷ù¯ºG%Ô'ZFâ]ñ°l€ny”å%¯Ûå4
+¯¥Å¯L¢€Ì§tğo"“’Ê%{÷Zn¹bT2}¢ïñ§›ï£'³ù¢:HÃß1ÿ€#ƒò–†e5C¿t¾Z›sŠ<†4¿`‰È$¤ºE‘ôòºQX6=£‰3’–ctmYPÃšæ_ GoB]üºùä»mdiÙ¦G{Ô.~4‘Wšï9ÿ¦¸Túe¡5ßç]aÙ İ÷"óß0¦‹Üï³òy^b®ÀJÓöç¥ÛäĞĞs˜ùë”’ŸÏ©Š³¬›o#@MÚOŞóº{c\*;ÖÊç¹_håídåÛäW¡æ÷æsŸkm? V¥êTE´gyk5ª(7Äñ…À<u‘•ÏsĞÊSÅÈÒ“¯ïÍ`Î4Öc—Lî/S¤úÑ^bï¸T€æh]´×›ÑÏó„&éiÓ¢’9^šŸ3­üïß¥Z+úåq22‰¾ÑÒß!5ëÿQaÙ mR¥@ëïÏ‘I@£¥s<:4?µòmóìĞ&÷+ŸŸî]OˆL¢oÎ0¿›¿–{°	0˜¬ü5¨!×.Í½y®•Ïñ¡øÙÚÊ·M—æ€xÌsøQh=ó2ó»ù+>—
+Ğ¼÷šÏu¸hdsà±ÿû¡øYÅÊ·Ín¡LîCV>¿=B3èÍ˜¼Äünş*t²`X6@ûô9ÎãZìÒö°;Zùüú2¬ÒÀ¥7Œš™Àxl ô¬Ğzdó»ù+¶ŠKè=”{TI[92‰9ØÕÊç×¥©ºÍÊ¶Í§bRÚ™¯ôoß¥IÍĞ“æÍïæZ\*@¯Ülå¯Ç.½!ïiåóëÓúï«¬lÛ|9öğ'¥ŠJæ¦=æÍ '41Äëæ¯IG¬ÉFs…•¿&»ô–´¯•ïoúär+Û>GÅş¤ö±²¹İ{øı %yW™ßÀgâRzÇc Ksq4)­t~}Zf¬š%Û¦K… Şnå{6–Ò[Ìïæ«åŠV †§åz¥ç ü-4ƒ9óèÍÀ—ª÷•l›bRÛ[ùß~ÙĞ7oŠkÍïà­q© ½£K_“¿Í`Î<&?94?©Ñwí’móÁĞ&§û¥û„fĞ8İ ½nşªø×§É8@4ëóû¡Ì™G5¸—†fàç©V¾mºT$I#5¥óûxhÓÍùJó{ Ø,. —¾gå¯Ë®í’÷L+ŸãB3ğó*+ß6Û„f0g·XÙü~{øíÚÎünş?Ìè£Ì§ÀK"“€Ç[`×F9Fõ9+ß6k†f0gú­Jç¸ahò¨3®Ğ7«õó úèó¹>»Tp†Òow[?ÖƒÿÁÊ¶‹(»6K^£5¥Ïñ“B3hĞ¦æÓ¹(NÌè£u­|	XE×& Îp–•ÏuÓĞÊ{¢•Ÿ ø§Ğ£·uûĞ‹"“h*óy4ºNØµó úfËh=®ÏıóÆW¬|®G„fPŞŞV¾MN	Í`0š‹VzHq}Š%óh†f––~²œ'æô†­ÕI{\›Š®n”âQ‰TŸL¢ İõ¶^ºMvLb‡›Ïù~¦å¥î˜ÉÑæÓØú¾Ô—õ·@ªÓîuó¿,Å#âRŠö&ğÈùı‘I´­ù´ÇÓ"“‚¶oö:ï¿aİ=ïÃ©øæÓĞGæôÍ¾æ×	*º´üD®²ò9ß`ù“JKTıQKÙJ·Å-Óÿİ]¤ãò\’şá¸TºÍcÆ¥B–º´Å(Ğ’7›ïÍÿïÖıï¡úfï‘ûG#“(`'ói‡ã"“>OxÿúäıÚ¸TºIß•®6Ÿşf\@¯lm>3şgO„e3ºW˜Oîñ\50©XÂòş)í°}`£Pîš·áu<˜b“°l:HË"¼÷éy }ñŒ÷šïÍ_ÿş.mÿ;;š¬u‡ù´jt}‡@}§öš zWŠùãR™†ê=¯…Û­‡Áâ¼–şı<2	 'Ôy½íÍ{E%TÀ—Ì¯	Ìcï3¿ÜÌc*µ|“ö¼´º¢ëŸÃŠSQ‰‡Ì§A_˜ĞK¥ø£ùßü¯°¶–Ay…™ï‰Ke(/6Ÿ²Ï3bƒ¸T¦ìmæ]ŒİòÀƒÌ§!/1–X ÃĞÚôÍ¿“Óeã œJQ_r©ùµ‰^‚^–Í`´iÚıæ—óÅq©¡ç˜ÿõ16ËõíËk¨ñMy ­›'ÅÌ¿sSì”Si;šo»è!àİaÙLNëı½–eÏˆmÃ²)g÷™ÿ52Ë=öÛVÜhc6ŒLŞ6²˜›ÿO­»k¾çDIW›}ŞêmŒ£Yû˜ßgÙ¡ÚVÏï¥±
+-ìÚˆPq'šOãµ4¹¨í ‹¹ùk’ÓA9yÙÕbÚê"‹¯^º\ŠŸ8öA¢ëKÿæäëæßF½^¨½¶=†˜ÔhKæ´ìÓákõjA9yÒ’µk,¦Íşa¹N‚÷¾-İÓrQ¦ˆ¼~gy¤¡e:~e1×M/—¾Õ|¬ëU¥€®ğá=ól³ œ"xš]Ü–bšå—¦’tãß9Åµ¹èÓBW7~ÖÒó0øgk£^ÆPÎ6ŸÆêSGxÑ,|ÏŞ3ÇƒrŠäU»d²Ğä³c-Whµxæ1lšâ«–‹ğDçğ¥»«´ƒí=æßn½Z¨ÚüÛşjÓ†±X>Lf2{U¶›5Ê)šú°¨¨‰BŸOÏH±ŸåZòªÜ¸’åQm2´XŠ-WB}•å„ZÜ0ÿDqÓôãê¤yOšTôfy WYÅ=#“ ôx‹òÕ$ßVgzB[úÖº™¶zá{éhÍÜÏj‰3ÇG¢òt¹•omZ²Ld@c1Ÿí\'
+Z0&­j<kä÷-±[âY.zF4¿<pMói˜#“ £¢[ZƒÑÙÿÕòHÃ8ĞŠ£ë­ş¶Ëq®uÃ£4¿"b¥&Õn”Sq{›O£l™ĞÃŸ`1ıßR¬“VghB¥:åÚ7Ú.†¾û/;zÓ6Gs0"öÒhvyào¬|cè›fŸ¿5S¡İæ":{-)Ü*(§®ÑD<‰Í-Çİ)6•Fm”ê]DL²mn÷À'˜OCŒÃ÷%`{X\‡ÿÎ œºêíVÿ¦Û•Ğ
+‰M¦ÖœMÓ¨ŠÒy·³–Ö*=4¯Y³ëF&4BåV£ŞJÊ©ëT¹¯öÍ·vh$èSmÈPı‹ˆö>ŞYèQ:QU’šHô\óßÍmFh}ùÜ1iuú¢iVÿ&\+tÎm3ÕFì‘ƒ-¦İ;¿{ &‚x¼ì™Ğ }wÕd¼ˆç÷–—â½×ÆoN€&¦mX¢ñzD{|ßüÛ¾óËw2ŸÄŸ™Ğqšg£í°#:ü[S<1&­&½ÆÆgu€–BÛêAi3'm€äıtzy ÇÖ¿—‡f t›¶Úõ(²5Qh’×1i5m½±ú7hÏP}‰¥K5XO­`yI¤÷oÑÉ]75¢+lç¿{ A´9Œ×[³††_“V/,šâ[VÿF]:T}uš±{Pš¬~¯ùÿ.zàìÔîÚşÑ#Ñ5"“ :LëĞ£:ş½‚rêM|ÅÜ "BkĞœ#æ†ì•Ğ ¦Yùÿ™ ĞqúÎ1ñïÈ |úJ%’²ú7ğQC[O³†Öw×fx3BË0—Ëf çXù$Í è¾¯˜oÇòšî^díÍøå-‡15ÒÚ}¯ßé”¸TæLû?ë‰¤t’/ŒLhÀúæ{X?.•± ‡©7YN¯}sŸ,N5–÷•öXóû°u`s¤¢¥Ô0Ô‘I ğØkcF˜Ç8Ñ$iUmŒÚªyĞKÛI)ÖqÌ{œéÁÏãwÓ¾8sæ1GŸ³òIšĞÕã÷º)Ü™bÁ¸TÆ’n¸zĞŠªå0k\lyÙã¼súœæñûMÌa Oµã¾é0;«˜ïb—¸TÆšJ+??Åg-W[ô.Vñ˜³,OL[;$3h…ÇïùPŠãÒ˜3­ÕA•Nt•È$€Æh¯€ËŒuß5h]÷¶–G4ªßxØ¹UZ·EŠ“-—P×<ª…"“Àh>×æÏ#“„`K'ù§Ğ€öx|v›9Øé­æMñdËå_µª@óvN±ûôÿÕšó[ŞjõóÔ9LÌD»n3Ÿë²s{|ÔÊ'ù¹Ğ€ölb¾ Ä¥ôŠ×ä?Õ éÜüœÓ­|¢Û†f ´GCô7˜ïCÀ–aÙ ı ëòæs=~%0h¸É£ìå²‘I :Ä| Î·\ĞÀ`ôéÌëz\70<ÓÊ'Iù_`0O2ÿšãÌ ÷kó¹Ï‹LbPï°ò‰šĞ6¯µÆ3âRëXÑ £^b~×áyì+Ÿè[B3 Ú¦Yà \“Àœé!ÙëÛ¿Vtrc&’¤k†f ´Mµæo6ß€ÛS,•Ğ 7˜ßõw``SÇó •MTeH)@G_< ì LL{Ö¨>¿Çu§ÂN+Ä¥28•”,ì©¡ ığË…ç€ÊÉ®•ĞÏğcóÊë­|²{G& ôˆ&Ïz> (¾–Ğ­Ä)=>#´Âg­¸T†ã±¹S{ÑÛ¹Ç³Æ³¢ğ3ó»Ö~˜ÇĞ<–­šĞ/Ç›ÿÀ/â@€¼Æ|¯µç„e2‚;¬l²š HÇŒNÃ…Ş…oˆJè(í‚{£ù]cçÄ¥2<m[éñf`j¾cş Z—ü˜¨„€ú‚ù^c›Å¥2¼g[ù„Ù˜º§YÌ\ M¬5b÷¸X3ôzËÛâÎˆ×ZŞ:W[èvnç4dEËÛÌ¿+Å¡)¾nù|ûIŠoYÿ™»¦ØbúŸ<Ÿg¾#m?Ke4EvÍ è/uŞ Š÷9æ°XŠõSìâ#)KqaŠ{†8>=]>ıŸÕÍäIÇ‹Ñ-™b§ßLq½v.jS:ßH±—å=,ô8Oác}´ù­ùŸ>æâ<Ö=>34 ¿VLñ€ù? ¨6ÀÆS8N•7Õ¼uÖ{Z.-~VŠ[Y·V0=}
+Ç©S!9M¢û‘ùÖ°Ğ¿[Aø¸å"íª·ĞˆÇıuÇcU4Qç$+›´ÔGıA <Ü'Íÿ@¡É»“­U;ÅÊ)^`ù-üó–‡r¯¶˜	‹“…j·ïb­³ŞS‹[®÷rƒÕıí×X~ Ñç›¤Xj’c©óñè>¸Î YÓÅV6ñ+cè=u´¥WêÌ.Ô™¯—â¹–?å”âdËo^^ERJÆM)öH1ÿH-A¨mßoqçäTB“\ÏLñåïµ<A•oorşï1rëR­şû¬lâ?
+Í »YıÎ´¥ĞáöÆräÒ¶²Ü¶µß.Çİ);jGZŞÊ'ÿ¥Ğ€ñ ¡í«­~çÖZ¨ºÛ
+Ã77f¡É}š”Wû÷l!v±Ãy,Ü34`|hÒSíÎ­ÅĞF§Ş³åûWXÙ„m­|lš0>ôÉî·V¿“k5ô¸™Î¹#4¡®…¹]‰ŒÖÌu¼ÇÊ7À3B3 ÆË–V¿“k9Î¶Ég‡ã¿>jõ¯–âèÑš¹Íğ-İ”|i¢míÎ®å¸ÔrBLL'5—«öïÔRÜœb‰Q»&Uk*Ù7fİŞh¹ZZíN¯åĞråå‡mø1ñi«ÿû´ÛŒÔÒ••Şø±‡Œ­İ­~§×zh$`ña¾ç>`õ—ÖâÛ#µtüÉÊ6Ä÷c[ªÊ§zéµ;¿ÖCEb¨˜½ÄêWtl-4ô¿ô(İ¥‹ {øÀX{ªåşµ;ÁÖã°a¾‡Tâù.«ÿ[´*÷»å(İ‹Xù904 ´úaâUÃ6|0š4Zì?JcwÅ
+V¾AvÍ €jh×±Úaë¡bAËÙö}A™éáC;]Î=Jcw…†K7ÊC3 TÃºµ  ˆIDAT *ÓJ¥¶©G³“¹¦à	ÆŠ’aãvëÁÃâ&V¾a^š€iÌ([ÛğSñšÚmŞRèÛl¤–îÍø,İ8†f `fo±údë¡¥Ì¶áõ¤ÿ²úmŞRì<RKwĞV¾qVÍ À¬>bõ;ÉÖ£É¢.#8ÆbÚS«K±“å·gİ'ÖL±‘åÉ—*9ü­—X·G±>5Z3wÓ»¬|5W
+è!-k«İYNzëT%>ÕQ9ò7¥x^Š§[~+ÕÒ*mB£›ÆïwÃ7ysÔW?`¾í¨BK¯I1ÏÇ¥?»zŠW¤ØËòÄYù%ëÃÆ))æ"ÎÛ×Ê6ÖDËĞĞeê¨4¡­f‡©Ğä2uŞÇ¦ØÇòî£k¥˜wˆ\æ™şÏ]|ìqŒ-òxœ*	ÿV+{?Ğ¿k%Ës4´Úì«)~e1µÎM±PÁ\:á`+ÛHwÇ>€I¨ºİO-æfyKŠ3,<h‡Ñç§XÑÊî¢×ë,®XMß‹šym+­µUóeSlâ)¾˜âtËçd©›ÿ"q©Ä)½ÛÓ-±‡`æ·r³Û¿Ùò¤ßèZú+X~óó~ ø›åöë£§˜O›i´§KŸu,šg ‰{záÕ.š×7ÿÿĞJÉÿúØÃ0€aJÛ{[8Å/Íÿ!àåQ	SÅÖÒmõkgc%?ë¥x}Š,ß×¾83¯ˆèõÍ_²ò' €î™è!@#vÚÔsØŞÓ‚–'ëy> –M}K¿ÎÊ¶“nœ}X®Ïfk§ØÎz~óÍ°-y\{ø † ‡€­Î°½—5Ìwvø=Ö¿Ï ›Zùv:44q’•=	Æaé€nùùôí3ÀVşíÿ	¡ }÷(y"\{ø `‹Y~S÷z èÓg fhµVÉö9)4sš•=ÎŠ=| øA{= ôé3€&t–nöiÔÏ¬ì‰ğ³ØÃ€ÿĞFH^ Š¾|(=ê«]ñšŠ9İÊ§Æ> ü‡V.\e~ }ø -£K×Ùÿ|h(ªt©Ğ¯Ç> ü­çöz Pm„ãRq±«•o—g†f€¢T2±äÉpPìáÀÿyšù= (Zÿp•mÎi¥f&°£q èí>çõ Ğòg€'¦ø·•m}C3@qËØÿ–>œJ<˜âÑ±‡ ÿãÃæ÷ Ğòj İ¬K¶…&VÍ .´×r‰â‹Ñ ³Ğ>ò^ ŠVG9¯°²ípNìáÃË*–÷nÊÉpgŠå¢ &à¹?@‹ŸaåÛa×Ğàêe6ú÷¡‡RlÈ 0¡šß€^–Z[PºH’–.šÜi÷£aG´_v«Cb úi%+?ámæh©Ï›;ÅMV6ÿ“C3@}?;Şò[ıd'€&j+á•ê& Lê|ó{ hé3ÀÖV>ÿmB3@¸åSì”âk–«ûı*ÅR|5ÅS<®Ş¡À½Ïü ZZ ‡•’¹ß•b¾Ğ  ÂãmÎ#™S‰>,b¹‚aÉ¼Í  €œiãıàV>ïMB3  `o7¿€VüÔÊæ|MŠG†f  À–JñOÏÏ š§UªÊëŒøxh  LÁOl<?ìnåó]34  ¦àÍæ÷  Õ Å¥20ÓÿÖÊæzQh  LÑâ–7*ózĞ'm‹{ZŠÏ¦xgŠ—X.¿»¬åB<¥é¯ÜÖ±¼Îÿ-)>™â»).Iñ€CïqÈ  Wß7¿€9…*Ş˜âòç¥øqŠR|9Åa)¾â€YâsÓÿB…Ù~˜â\Ë[ÿÕ|ç5LšK°ÌĞ­ @e¯µz }ˆßä  Ô·pŠû¬ş´ÕØaø&  N²ú7ÒCõº8Ñ €lkõo¦-ÆQ£46  ]±€åe{µo¨­Å£46  ]òM«Cm)n2ŸeŒ  „ÒúüÚ7Õ–âS£53  İò¨·[ık+ñ´Ñš €î9ÂêßX[ˆKGm`  ºhK«sm!öµ è"Mj»Ùêß`»*_¼âˆí @g}Ñêßd»§Ş´  t×s¬şM¶Ëñ¦‘[ €Óvº×[ımãş½i è¶ÏXı›mãø©4*  ]·bŠZ®ø›Xı›o­¸Õò–¿û¥xÒÚ €æÌ•b•/K±wŠo¥øSŠ‡¬şºd\•âäIñò+”h<  úF[ánâ-)¾”â)®³¼T®öÍ|²¸!ÅÙ)¾’â)61¾í 0eó¦X-ÅRìšâ“)NLñË—X®5ğ/+c×ƒÇ-).KqfŠïXÏğÎ[§X#Åüy €,iùAaÃ›§Ø*Å6ÓãÍ)v¶ü†şÎéÿç™şşÖÓÿ™g[ş6¿”å                                                                     }ğÿa™å½Ë9    IEND®B`‚
+
+--- ./frontend/utils.js ---
+
+// frontend/utils.js
+// -----------------
+// Basis-HTTP-Helper: einheitliches JSON-API-Schema
+// und dynamisches Auslesen von http-base/ws-base aus <chat-admin> oder <chat-app>
+
+export function getBases() {
+  // Suche zuerst im Modul-Scope, dann global nach chat-admin oder chat-app
+  const el =
+    (document.currentScript?.ownerDocument || document)
+      .querySelector("chat-admin, chat-app") ||
+    document.querySelector("chat-admin, chat-app");
+
+  // Lese die Attribute oder falle auf window.location.origin zurÃ¼ck
+  const httpBase = el?.getAttribute("http-base") || window.location.origin;
+
+  // Ermittle ws-base, ggf. aus http â†’ ws
+  let wsBase = el?.getAttribute("ws-base");
+  if (!wsBase) {
+    wsBase = httpBase.replace(/^http/, "ws");
+  }
+
+  return { http: httpBase, ws: wsBase };
+}
+
+export async function apiFetch(path, { method = "GET", body } = {}) {
+  // Hole die Base-URLs bei jedem Aufruf
+  const { http: HTTP_BASE } = getBases();
+
+  // Baue die URL
+  const url = new URL(path, HTTP_BASE);
+  if (method === "GET") {
+    // Cache-Buster
+    url.searchParams.set("_", Date.now());
+  }
+
+  // Header mit Admin-Token und ggf. JSON-Content-Type
+  const headers = {
+    Authorization: `Bearer ${localStorage.getItem("adminToken")}`,
+  };
+  if (body) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  // Anfrage abschicken
+  const res = await fetch(url.toString(), {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  // Antwort parsen und auf OK prÃ¼fen
+  const payload = await res.json();
+  if (!res.ok || !payload.ok) {
+    throw new Error(payload.error || res.statusText);
+  }
+  return payload.data;
+}
+
+
+--- ./frontend/pages/404.html ---
+
+<h1>Page not Found - 404</h1>
+
+--- ./frontend/pages/admin.html ---
+
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>Admin Panel â€“ Realtime Chat</title>
+  <link rel="icon" href="/img/admin-icon.png" type="image/png">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body>
+  <!-- Nur noch die Web-Komponente - Login ist jetzt darin integriert -->
+  <chat-admin></chat-admin>
+  
+  <!-- Scripts -->
+  <script type="module" src="/components/AdminPanel.js"></script>
+</body>
+</html>
+
+
+--- ./frontend/pages/landing.html ---
+
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chat-Portal</title>
+
+  <!-- Skript -->
+  <script type="module" src="/src/landing.js"></script>
+
+  <!-- Google Font -->
+  <link rel="preconnect" href="https://fonts.gstatic.com">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+
+  <!-- Ausgelagertes CSS -->
+  <link rel="stylesheet" href="/styles/landing.css">
+</head>
+<body>
+  <main class="card">
+    <h1>ğŸ”‘ Chat-Portal</h1>
+    <p>Gib den 64-stelligen Raum-Token ein<br>und trete deinem Chat-Raum bei.</p>
+
+    <form id="enter-form" autocomplete="off">
+      <label for="token-input">Raum-Token</label>
+      <input id="token-input" type="text" placeholder="SHA-256-Hash â€¦"
+             pattern="[a-fA-F0-9]{64}" minlength="64" maxlength="64"
+             title="64 hexadezimale Zeichen (SHA-256-Hash)" required autofocus>
+      <button type="submit">Betreten ğŸš€</button>
+    </form>
+
+    <footer>&copy; 2025 Unser Chat-Projekt</footer>
+  </main>
+</body>
+</html>
+
+
+--- ./frontend/pages/chat.html ---
+
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Chat</title>
+
+  <link rel="icon" href="/img/chat-icon.png" type="image/png" />
+
+  <!-- Seite-Skript -->
+  <script type="module" src="/src/chat-router.js"></script>
+</head>
+
+<body>
+  <noscript>
+    <p style="margin:2rem;font:1rem/1.4 system-ui,sans-serif;text-align:center">
+      âš ï¸ Dieser Chat benÃ¶tigt JavaScript. Bitte JavaScript aktivieren.
+    </p>
+  </noscript>
+
+  <!-- Web-Component; Attribute werden vom Router gesetzt -->
+  <chat-app></chat-app>
+</body>
+</html>
+
+
+--- ./frontend/api.js ---
+
+// frontend/api.js
+// ---------------
+// Klare Methoden fÃ¼r jeden Endpoint
+
+import { apiFetch } from "./utils.js";
+
+export const getRooms = () => apiFetch("/rooms.json");
+export const getBlocklist = (room) =>
+  apiFetch(`/blocklist.json?room=${room}`);
+export const addRoom = (name) =>
+  apiFetch("/admin/add-room", { method: "POST", body: { name } });
+export const removeRoom = (hash) =>
+  apiFetch("/admin/remove-room", { method: "POST", body: { hash } });
+export const updateBlocklist = (hash, list) =>
+  apiFetch("/admin/update-blocklist", {
+    method: "POST",
+    body: { hash, list },
+  });
+
+
+--- ./frontend/utils/bus.js ---
+
+// utils/bus.js
+// ------------
+// Superâ€‘leichter Eventâ€‘Bus auf Basis von EventTarget.
+//  bus.on('evt', fn)           â€“ subscribe
+//  bus.off('evt', fn)          â€“ unsubscribe
+//  bus.emit('evt', {â€¦})        â€“ publish
+
+const bus = new EventTarget();
+
+export const on  = (evt, fn) => bus.addEventListener(evt, fn);
+export const off = (evt, fn) => bus.removeEventListener(evt, fn);
+export const emit = (evt, detail = {}) =>
+  bus.dispatchEvent(new CustomEvent(evt, { detail }));
+
+export default { on, off, emit };
+
+
+--- ./frontend/utils/sanitize.js ---
+
+// utils/sanitize.js
+// -----------------
+// Kein externes Paket erlaubt.  VERY simple allowâ€‘list Sanitizer:
+// â€¢ Erlaubt <span>, <b>, <i>, <strong>, <em>, <br>
+// â€¢ Entfernt jegliche Attribute auÃŸer class.
+//
+// â†’Â FÃ¼r unseren Chat reicht das, da nur <span class="ip-info â€¦"> vorkommt.
+
+const ALLOWED_TAGS = new Set(["SPAN","B","I","EM","STRONG","BR"]);
+
+export default function sanitize(html) {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+
+  const walk = node => {
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      if (!ALLOWED_TAGS.has(node.tagName)) {
+        node.replaceWith(...node.childNodes);           // unwrap verbotene Tags
+        return;
+      }
+      // Attributeâ€‘Whitelist
+      [...node.attributes].forEach(attr => {
+        if (attr.name !== "class") node.removeAttribute(attr.name);
+      });
+    }
+    node.childNodes.forEach(walk);
+  };
+  template.content.childNodes.forEach(walk);
+  return template.innerHTML;
+}
+
+
+--- ./frontend/utils/env.js ---
+
+// utils/env.js
+// ------------
+// Liefert die HTTPâ€‘ und WSâ€‘Basen (memoisiert) sowie diverse kleine
+// URLâ€‘Utilities, die bisher in jeder Komponente kopiert wurden.
+
+let _cachedBases = null;
+
+/**
+ * Ermittelt http://â€¦  und ws://â€¦  Basisâ€‘URLs.
+ *  â€“ Zieht Werte aus Attributen `http-base` / `ws-base`, falls eine
+ *    Komponente sie setzt (z.B. in Tests oder Storybook).
+ *  â€“ FÃ¤llt sonst auf location.origin zurÃ¼ck.
+ * @param {HTMLElement} [el]  â€“ Optional: Komponente, von der aus gelesen wird.
+ */
+export function getBases(el) {
+  if (_cachedBases && !el) return _cachedBases;     // speedâ€‘up fÃ¼r globale Calls
+
+  const http = el?.getAttribute?.("http-base") ||
+               location.origin;
+
+  const ws   = el?.getAttribute?.("ws-base")  ||
+               (http.startsWith("https") ? "wss://" : "ws://") +
+               new URL(http).host;
+
+  return (_cachedBases = { http, ws });
+}
+
+/* ---------- Roomâ€‘Token aus URLÂ -------------------------- */
+const HASH_RE = /(?:\/pages)?\/chat(?:\.html)?\/([a-f0-9]{64})$/i;
+export function roomHashFromPath(pathname = location.pathname) {
+  return HASH_RE.exec(pathname.replace(/\/{2,}/g, "/"))?.[1]?.toLowerCase() || "";
+}
+
+
+--- ./frontend/tests/sanitize.test.js ---
+
+import assert from "node:assert/strict";
+import sanitize from "../utils/sanitize.js";
+
+const evil = '<img src=x onerror=alert(1)><span class="ip-info">Okay</span>';
+const clean = sanitize(evil);
+
+assert.equal(clean, '<span class="ip-info">Okay</span>');
+console.log("âœ” sanitize() removes disallowed tags");
+
+
+--- ./frontend/src/landing.js ---
+
+// Leitet vom Token-Formular zur Chat-Seite um
+function init() {
+  const form  = document.getElementById('enter-form');
+  const input = document.getElementById('token-input');
+
+  form.addEventListener('submit', e => {
+    e.preventDefault();
+    const hash = input.value.trim().toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(hash)) return;            // Client-Side-Validation
+
+    location.href = `/chat/${hash}`;                     // schÃ¶nere URL ohne .html
+  });
+}
+
+document.addEventListener('DOMContentLoaded', init);
+
+
+--- ./frontend/src/chat-router.js ---
+
+// Initialisiert <chat-app> anhand der URL  /chat/<hash>   oder   /chat.html/<hash>
+import "/components/ChatApp.js";
+import { roomHashFromPath } from "../utils/env.js";
+import bus from "../utils/bus.js";
+
+function init() {
+  const hash = roomHashFromPath();
+  
+  const app = document.querySelector('chat-app');
+  if (hash) {
+    app.setAttribute('room-hash', hash);     // Raum-Hash injizieren
+    bus.emit("room-selected", { hash, name:"" });    // AdminPanel evtl. gar nicht offen
+  }
+  // Kein Redirect mehr - Token-Form wird angezeigt, wenn kein Hash vorhanden
+}
+
+document.addEventListener('DOMContentLoaded', init);
