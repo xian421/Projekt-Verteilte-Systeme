@@ -7,15 +7,20 @@ const chatRouter = require('../lib/chatRouter');
 jest.mock('../lib/config', () => ({
   PUBLIC_DIR: '/public'
 }));
-const serveLanding = jest.fn();
-const streamFile   = jest.fn();
-const normPath     = jest.fn();
-const findRoom     = jest.fn();
+jest.mock('../lib/staticServer', () => {
+   return { serveLanding: jest.fn() };
+ });
+ jest.mock('../lib/httpUtils', () => {
+   return { streamFile: jest.fn(), normPath: jest.fn() };
+ });
+ jest.mock('../lib/roomStore', () => {
+   return { findRoom: jest.fn() };
+ });
 
-jest.mock('../lib/staticServer', () => ({ serveLanding }));
-jest.mock('../lib/httpUtils',  () => ({ streamFile, normPath }));
-jest.mock('../lib/roomStore',   () => ({ findRoom }));
-
+ // Jetzt die gemockten Funktionen holen
+ const { serveLanding } = require('../lib/staticServer');
+ const { streamFile, normPath } = require('../lib/httpUtils');
+ const { findRoom } = require('../lib/roomStore');
 describe('chatRouter', () => {
   let req, res;
 
