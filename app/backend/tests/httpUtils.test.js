@@ -39,27 +39,35 @@ describe('httpUtils', () => {
     req.emit('end');
   });
 
-  test('collectJSON bei invalid JSON sendet 400', () => {
-    const ee = new EventEmitter();
-    ee.on = ee.addListener;
-    const req = ee;
-    const res = {
-      headersSent: false,
-      setHeader:  jest.fn(),
-      writeHead:  jest.fn(),
-      end:        jest.fn()
-    };
-    // Spy auf sendJSON
-    jest.spyOn(httpUtils, 'sendJSON');
-    collectJSON(req, res, () => {});
-    req.emit('data', 'not-json');
-    req.emit('end');
-    expect(httpUtils.sendJSON).toHaveBeenCalledWith(res, 400, {
-      ok:    false,
-      error: 'Bad JSON'
-    });
-  });
+ test('collectJSON bei invalid JSON liefert 400 und Fehlermeldung', done => {
+   const ee = new EventEmitter();
+   ee.on = ee.addListener;
+   const req = ee;
+   const res = {
+     headersSent: false,
+     setHeader:  jest.fn(),
+     writeHead:  jest.fn(),
+     end:        jest.fn()
+   };
 
+   collectJSON(req, res, () => {
+     // dieser Callback darf nie aufgerufen werden
+     throw new Error('Callback sollte bei invalid JSON nicht gerufen werden');
+   });
+
+   req.emit('data', 'not-json');
+   req.emit('end');
+
+   // Jetzt prüfen wir, was sendJSON intern macht:
+   expect(res.writeHead).toHaveBeenCalledWith(400, {
+     'Content-Type': 'application/json'
+   });
+   expect(res.end).toHaveBeenCalledWith(JSON.stringify({
+     ok:    false,
+     error: 'Bad JSON'
+   }));
+   done();
+ });
   test('normPath normalisiert URL-Pfade', () => {
     const req = { url: '/foo//bar/', headers: { host: 'example.org' } };
     const p = normPath(req);
