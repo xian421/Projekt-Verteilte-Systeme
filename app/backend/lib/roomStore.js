@@ -129,6 +129,7 @@ module.exports = {
   liveRooms,
   findRoom,
   ensureLiveRoom,
+  sendToAdmins,
   sendToAll,
   broadcastSystem,
   banIp,
