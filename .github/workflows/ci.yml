@@ -32,7 +32,7 @@ jobs:
       # 4) Abhängigkeiten installieren
       - name: Install Dependencies
         working-directory: app/backend
-        run: npm ci
+        run: npm install
 
       # 5) Server im Hintergrund starten
       - name: Start Server
