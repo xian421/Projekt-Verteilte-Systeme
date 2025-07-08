@@ -18,7 +18,8 @@ WORKDIR /app
 
 # Backend kopieren und Dependencies installieren
 COPY backend ./backend
-RUN cd backend && npm install --production
+RUN cd backend && npm install 
+# RUN cd backend && npm install --production
 
 # Frontend (später: nur gebaute Assets aus Build-Stage)
 COPY --from=build /frontend/dist ./frontend/dist
