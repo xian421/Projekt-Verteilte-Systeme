@@ -1,3 +1,4 @@
+# .github/workflows/backend-ci.yml
 name: Backend CI
 
 on:
@@ -10,17 +11,20 @@ jobs:
   test-backend:
     runs-on: ubuntu-latest
 
+    env:
+      # Setze hier defaults, die config.js erwartet
+      ADMIN_PASSWORD: keule
+      PORT: 4441
+      NODE_ENV: test       # sorgt dafür, dass unser Throw in config.js übersprungen wird
+
     steps:
-      # 1) Code auschecken
       - uses: actions/checkout@v3
 
-      # 2) Node.js installieren
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
 
-      # 3) Cache für node_modules
       - name: Cache Node modules
         uses: actions/cache@v3
         with:
@@ -29,19 +33,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-node-
 
-      # 4) Abhängigkeiten installieren
       - name: Install Dependencies
         working-directory: app/backend
         run: npm install
 
-      # 5) Server im Hintergrund starten
       - name: Start Server
         working-directory: app/backend
+        # Für den API-Integrationstest: Starte im Hintergrund
         run: |
           npm start &
           sleep 5
 
-      # 6) Tests ausführen
       - name: Run Tests
         working-directory: app/backend
         run: npm test
