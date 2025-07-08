@@ -41,7 +41,7 @@ class RateLimiter {
 
     const ok = rec.count <= this.MAX;
     if (!ok) {
-      logger.warn(`Rate-Limit: ${ip} blocked (${rec.count}/${this.MAX})`);
+      logger.warn(`Rate -Limit: ${ip} blocked (${rec.count}/${this.MAX})`);
     }
     return ok;
   }
