@@ -2,7 +2,10 @@
 // ---------------------------------
 const http = require("http");
 const { Server } = require("ws");
-const { PORT }   = require("./lib/config");
+const { PORT, validateConfig }   = require("./lib/config");
+
+// 🔒 Sicherstellen, dass Umgebungsvariablen in Production gesetzt sind
+validateConfig();
 
 const { serveStatic } = require("./lib/staticServer");
 const apiRouter  = require("./lib/apiRouter");
