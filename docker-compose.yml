@@ -1,0 +1,13 @@
+version: "3.9"
+
+services:
+  ws-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ws-server
+    ports:
+      - "4441:4441"
+    restart: unless-stopped
+    # environment:
+    #   - NODE_ENV=production   # beim Einsatz eines Build-Tools aktivieren

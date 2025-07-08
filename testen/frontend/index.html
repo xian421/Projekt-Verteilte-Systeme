@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chat Dashboard</title>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --surface: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --radius: 1rem;
+      --shadow: 0 2px 12px rgb(16 30 54/.08);
+    }
+    
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --primary: #60a5fa;
+        --surface: #18192e;
+        --text: #f1f5f9;
+        --muted: #94a3b8;
+        --border: #232347;
+        --shadow: 0 2px 16px rgb(36 54 98/.17);
+      }
+      body { background: #101324; }
+    }
+    
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, sans-serif;
+      background: #f8fafc;
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    
+    .dashboard {
+      background: var(--surface);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 3rem 2rem;
+      max-width: 28rem;
+      width: 100%;
+      text-align: center;
+      border: 1px solid var(--border);
+    }
+    
+    h1 {
+      margin: 0 0 2rem;
+      font-size: 2.5rem;
+      font-weight: 800;
+      color: var(--primary);
+      letter-spacing: -0.02em;
+    }
+    
+    .nav-grid {
+      display: grid;
+      gap: 1rem;
+      grid-template-columns: 1fr 1fr;
+    }
+    
+    .nav-item {
+      display: block;
+      padding: 1.5rem 1rem;
+      background: var(--surface);
+      border: 2px solid var(--border);
+      border-radius: calc(var(--radius) * 0.75);
+      text-decoration: none;
+      color: var(--text);
+      transition: all 0.2s;
+      font-weight: 600;
+    }
+    
+    .nav-item:hover {
+      border-color: var(--primary);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 16px rgb(37 99 235/.15);
+    }
+    
+    .nav-icon {
+      font-size: 2rem;
+      display: block;
+      margin-bottom: 0.5rem;
+    }
+    
+    .description {
+      margin-top: 2rem;
+      color: var(--muted);
+      font-size: 0.875rem;
+      line-height: 1.5;
+    }
+    
+    @media (max-width: 480px) {
+      .nav-grid {
+        grid-template-columns: 1fr;
+      }
+      .dashboard {
+        padding: 2rem 1.5rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="dashboard">
+    <h1>💬 Chat System</h1>
+    
+    <nav class="nav-grid">
+      <a href="/chat.html" class="nav-item">
+        <span class="nav-icon">💬</span>
+        Chat
+      </a>
+      
+      <a href="/admin.html" class="nav-item">
+        <span class="nav-icon">⚙️</span>
+        Admin
+      </a>
+    </nav>
+    
+    <p class="description">
+      Wähle zwischen Chat-Teilnahme oder Admin-Panel zur Raum-Verwaltung.
+    </p>
+  </div>
+</body>
+</html>

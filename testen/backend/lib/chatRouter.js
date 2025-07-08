@@ -1,68 +1,63 @@
-// lib/chatRouter.js
+// backend/lib/chatRouter.js
 // ------------------------------------------------------------
-//  * "/" , "/chat" , "/chat.html"            → Landing
-//  * "/chat/<64-hash>" (oder ...html/<hash>) → Chat-Seite
-//  * alles Andere unter /chat…               → Landing (Fallback)
+//  • "/" , "/chat" , "/chat.html"            → Landing-Seite
+//  • "/chat/<64-hash>" (oder ...html/<hash>) → Chat-Shell
+//  • alles Andere unter /chat…               → Landing (Fallback)
 // ------------------------------------------------------------
 const fs   = require("fs");
 const path = require("path");
 const { URL } = require("url");
 
-const { PUBLIC_DIR, HASH_RE } = require("./config");
-const { serveLanding, serve404, streamFile, setSec } = require("./staticServer");
-const { findRoom } = require("./roomStore");
+const { PUBLIC_DIR }                 = require("./config");
+const { serveLanding, setSec }       = require("./staticServer");
+const { findRoom }                   = require("./roomStore");
 
-// Vorab den Chat-HTML-Template-Pfad bestimmen
-const CHAT_HTML = path.join(PUBLIC_DIR, "chat.html");
+// Pfad zur statischen Chat-HTML-Shell (ohne Platzhalter)
+const CHAT_HTML = path.join(PUBLIC_DIR, "pages", "chat.html");
 
 /**
  * chatRouter(req, res)
- * Liefert true ⇢ Anfrage komplett erledigt
- * Liefert false ⇢ Nächster Router / Static-Server soll übernehmen
+ *  ➜ true  → Anfrage komplett beantwortet
+ *  ➜ false → Nächster Router / Static-Server soll übernehmen
  */
 function chatRouter(req, res) {
-  const { host } = req.headers;
-  const url = new URL(req.url, `http://${host}`);
-  const pathname = url.pathname.replace(/\/{2,}/g, "/").replace(/\/$/, "");
+  const url       = new URL(req.url, `http://${req.headers.host}`);
+  const pathname  = url.pathname.replace(/\/{2,}/g, "/").replace(/\/$/, "");
 
-  /* --- Landing Routen ------------------------------------- */
+  /* ---------- 1 | Landing-Routen ------------------------- */
   if (pathname === "/" || pathname === "/chat" || pathname === "/chat.html") {
     serveLanding(res);
     return true;
   }
 
-  /* --- Chat-HTML mit Hash --------------------------------- */
-  // Akzeptiert /chat/<hash>  sowie  /chat.html/<hash>
+  /* ---------- 2 | Chat-Shell mit Hash -------------------- */
+  // Akzeptiert  /chat/<hash>   sowie  /chat.html/<hash>
   const match = /^\/chat(?:\.html)?\/([a-f0-9]{64})$/i.exec(pathname);
   if (match) {
     const hash = match[1].toLowerCase();
-    const room = findRoom(hash);
-    if (!room) {                      // Unbekannter Raum? -> 404
-      serve404(res);
-      return true;
-    }
 
-    // Vorlage lesen & Platzhalter ersetzen
-    fs.readFile(CHAT_HTML, "utf8", (err, html) => {
+    // Unbekannter Raum? ⇒ weiter zum nächsten Router (→ 404)
+    if (!findRoom(hash)) return false;
+
+    // Statische HTML-Shell ausliefern, keine Platzhalter mehr nötig
+    fs.readFile(CHAT_HTML, (err, buf) => {
       if (err) {
         res.writeHead(500).end("Fehler");
         return;
       }
       setSec(res);
-      res.writeHead(200, { "Content-Type": "text/html" })
-         .end(html.replace(/__ROOM_NAME__/g, room.name)
-                  .replace(/__ROOM_HASH__/g, hash));
+      res.writeHead(200, { "Content-Type": "text/html" }).end(buf);
     });
     return true;
   }
 
-  /* --- Fallback für alles, das unter /chat… beginnt ----- */
+  /* ---------- 3 | Alles unter /chat… → Landing ---------- */
   if (pathname.startsWith("/chat/") || pathname.startsWith("/chat.html/")) {
     serveLanding(res);
     return true;
   }
 
-  /* Kein Match – andere Router dranlassen */
+  /* ---------- 4 | Kein Match → andere Router ------------ */
   return false;
 }
 

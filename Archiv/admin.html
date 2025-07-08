@@ -1,0 +1,71 @@
+<!--admin.html-->
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>Admin Panel – Realtime Chat</title>
+      <link rel="icon" href="http://141.72.13.151:4441/img/admin-icon.png" type="image/png" />
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <!-- nur das Modul laden – Komponente wird erst NACH Login eingeblendet -->
+  <script type="module" src="./chat-admin.js"></script>
+
+  <style>
+    body{margin:0;font-family:system-ui,sans-serif;background:#f8fafc;
+         display:flex;align-items:center;justify-content:center;min-height:100vh}
+    #auth-screen{display:flex;flex-direction:column;gap:1rem;align-items:center;
+                 background:#fff;padding:2.2rem 2rem;border-radius:1rem;
+                 box-shadow:0 4px 18px rgb(0 0 0/.09);border:1px solid #e2e8f0}
+    #auth-screen input{font-size:1rem;padding:.6em 1em;border-radius:.5em;
+                       border:1.5px solid #e2e8f0;width:100%;min-width:16rem}
+    #auth-screen button{padding:.48em 1.4em;font-size:1rem;border:none;border-radius:.5em;
+                        background:#2563eb;color:#fff;cursor:pointer}
+    #auth-error{color:#dc2626;margin:0;font-size:.95rem;display:none}
+  </style>
+</head>
+<body>
+
+  <!-- 1) Login-Maske -->
+  <div id="auth-screen">
+    <h2>🔐 Admin-Login</h2>
+    <input type="password" id="auth-password" placeholder="Passwort eingeben">
+    <button id="auth-submit">Einloggen</button>
+    <p id="auth-error">❌ Falsches Passwort</p>
+  </div>
+
+  <!-- 2) Template für das Panel (wird erst nach Login eingefügt) -->
+  <template id="panel-tpl">
+    <chat-admin></chat-admin>
+  </template>
+
+  <script type="module">
+    const authScreen   = document.getElementById('auth-screen');
+    const pwInput      = document.getElementById('auth-password');
+    const submitBtn    = document.getElementById('auth-submit');
+    const errText      = document.getElementById('auth-error');
+    const panelTpl     = document.getElementById('panel-tpl');
+
+    submitBtn.addEventListener('click', login);
+    pwInput.addEventListener('keydown', e => e.key === 'Enter' && login());
+
+    async function login(){
+      errText.style.display = 'none';
+      const res = await fetch('/admin/login', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({password: pwInput.value})
+      });
+
+      if(!res.ok){
+        errText.style.display = 'block';
+        pwInput.value = ''; pwInput.focus();
+        return;
+      }
+      const { token } = await res.json();            // {token:"…"}
+      localStorage.setItem('adminToken', token);     // 1️⃣ für chat-app
+
+      authScreen.remove();                           // Maske weg
+      document.body.append(panelTpl.content.cloneNode(true)); // Panel rein
+    }
+  </script>
+</body>
+</html>

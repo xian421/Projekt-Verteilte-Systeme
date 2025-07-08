@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "checkJs": true,
+    "strict": true,
+    "target": "es2022",
+    "module": "es2022",
+    "moduleResolution": "node",
+    "allowImportingTsExtensions": true
+  },
+  "include": ["testen/**/*.js"]
+}

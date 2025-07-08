@@ -12,9 +12,10 @@ const {
 } = require("./config");
 const {
   findRoom, ensureLiveRoom, sendToAll,
-  broadcastSystem, banIp
+  broadcastSystem, banIp, stripIpSpans
 } = require("./roomStore");
-const { withinRateLimit } = require("./rateLimiter");
+const rateLimiter = require("./rateLimiter");
+const logger      = require("./logger");
 const { escapeHTML } = require("./utils");
 
 /* ---------------- Paket-Validation ----------------------- */
@@ -60,10 +61,9 @@ function attachWss(wss) {
       return socket.close(CLOSE_CODES.DUPLICATE, "Duplicate connection");
     }
 
-    // 4. Client registrieren & History schicken
+    // 4. Client registrieren  – History NICHT mehr hier senden
     (room.activeClients.get(ip) ?? room.activeClients.set(ip, new Set()).get(ip))
       .add(socket);
-    room.history.forEach(m => socket.send(m));
 
     /* ---------- Nachricht-Handler ----------------------- */
     socket.on("message", raw => {
@@ -75,8 +75,8 @@ function attachWss(wss) {
         return socket.close(CLOSE_CODES.INVALID_PACKET, "Invalid packet");
 
       // Rate-Limit + Auto-Ban
-      if (!withinRateLimit(ip)) {
-        banIp(hash, ip);
+      if (!rateLimiter.allowed(ip)) {
+        banIp(hash, ip, { auto: true });        // ← Flag setzen
         return socket.close(CLOSE_CODES.RATE_LIMIT, "Rate limit exceeded");
       }
       if (room.blocklist.includes(ip))
@@ -90,6 +90,19 @@ function attachWss(wss) {
           room.ipNames.set(ip, name);
           room.userNames.set(socket, { name, ip });
           socket.isAdmin = isAdmin;
+
+          // ➜ Verlauf jetzt nachreichen
+          room.history.forEach(msg => {
+            if (socket.isAdmin) {            // Admin sieht alles
+              socket.send(msg); return;
+            }
+            try {
+              const obj = JSON.parse(msg);
+              if (obj.adminOnly) return;     // überspringen
+            } catch {/* plain HTML – durchlassen */}
+
+            socket.send(stripIpSpans(msg));  // IPs raus für normale Nutzer
+          });
 
           if (room.leaveTimers.has(ip)) {
             clearTimeout(room.leaveTimers.get(ip));
@@ -126,6 +139,7 @@ function attachWss(wss) {
 
     /* ---------- Verbindungsende ------------------------- */
     socket.on("close", () => {
+      logger.info(`Socket close (${ip})`);
       room.activeClients.get(ip)?.delete(socket);
       if (room.activeClients.get(ip)?.size === 0) {
         const t = setTimeout(() => {

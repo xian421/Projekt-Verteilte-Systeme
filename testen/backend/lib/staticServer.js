@@ -1,76 +1,90 @@
-// lib/staticServer.js
+// backend/lib/staticServer.js
 // ------------------------------------------------------------
-// Liefert statische Dateien per Stream (Sprint D) und stellt
-// Hilfsfunktionen für Landing-Page und 404-Seite bereit.
+//  • Liefert Dateien aus PUBLIC_DIR   (Landing, 404, Assets)
+//  • Fügt Security-Header hinzu
+//  • Für JS/JSON/WASM optional CORS freischalten
 // ------------------------------------------------------------
-const fs = require("fs");
-const path = require("path");
+const fs       = require("fs");
+const path     = require("path");
 const { pipeline } = require("stream");
 const { PUBLIC_DIR, MIME_TYPES } = require("./config");
 
-// Sicherheits-Header für alle (!) statischen Antworten
-function setSec(res) {
+/* ---------- Security-Header ------------------------------ */
+/**
+ * setSec(res, allowCors = false)
+ *  – Standard-Header
+ *  – Bei allowCors zusätzlich:
+ *      • Access-Control-Allow-Origin: *
+ *      • Cross-Origin-Resource-Policy: cross-origin
+ */
+function setSec(res, allowCors = false) {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+
+  if (allowCors) {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS, POST");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  } else {
+    res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  }
 }
 
-// Kernfunktion: Datei per Stream ausliefern
-function streamFile(res, filePath, mimeType = "application/octet-stream", code = 200) {
-  const stream = fs.createReadStream(filePath);
-  setSec(res);
-  res.writeHead(code, { "Content-Type": mimeType });
+/* ---------- Datei streamen ------------------------------- */
+function streamFile(
+  res,
+  filePath,
+  mime = "application/octet-stream",
+  code = 200,
+  allowCors = false
+) {
+  setSec(res, allowCors);
+  res.writeHead(code, { "Content-Type": mime });
 
-  pipeline(stream, res, err => {
-    if (err && !res.headersSent) {
-      res.writeHead(500).end("Fehler");
-    }
+  pipeline(fs.createReadStream(filePath), res, err => {
+    if (err && !res.headersSent) res.writeHead(500).end("Fehler");
   });
 }
 
-/* Kleine Convenience-Wrapper */
-const LANDING = path.join(PUBLIC_DIR, "landing.html");
+/* ---------- Pfade zu Standard-Seiten --------------------- */
+const LANDING = path.join(PUBLIC_DIR, "pages", "landing.html");
 const ERR404  = path.join(PUBLIC_DIR, "404.html");
+const ADMIN   = path.join(PUBLIC_DIR, "pages", "admin.html");
 
-function serveLanding(res) { streamFile(res, LANDING, "text/html"); }
-function serve404(res)     { streamFile(res, ERR404, "text/html", 404); }
-
-/**
- * serveStatic(req, res)
- * Gibt true zurück, wenn eine Datei ausgeliefert (oder 404 gezeigt) wurde;
- * sonst false → dann kann der aufrufende Router noch weitermachen.
- */
+/* ---------- Haupt-Static-Router -------------------------- */
 function serveStatic(req, res) {
   const urlPath = new URL(req.url, `http://${req.headers.host}`).pathname
                     .replace(/\/{2,}/g, "/").replace(/\/$/, "") || "/";
 
-  // absolute & sichere Pfadauflösung
-  const safe = path.join(PUBLIC_DIR, path.normalize(urlPath));
-  if (!safe.startsWith(PUBLIC_DIR)) {
-    res.writeHead(403).end();         // Directory-Traversal-Guard
-    return true;
-  }
+  /* feste Seiten */
+  if (urlPath === "/admin" || urlPath === "/admin.html")
+    return streamFile(res, ADMIN, "text/html");
+  if (urlPath === "/dashboard" || urlPath === "/index.html")
+    return streamFile(res, path.join(PUBLIC_DIR, "index.html"), "text/html");
+  if (urlPath === "/")
+    return streamFile(res, LANDING, "text/html");
+  if (urlPath === "/404")
+    return streamFile(res, ERR404, "text/html", 404);
 
-  // falls Root-Verzeichnis selbst, nichts machen (Landing übernimmt)
-  if (safe === PUBLIC_DIR) return false;
+  /* Assets */
+  const rel = path.normalize(urlPath).replace(/^\/+/, "");
+  const abs = path.join(PUBLIC_DIR, rel);
 
-  // Prüfen, ob Datei existiert
-  try {
-    fs.accessSync(safe, fs.constants.R_OK);
-  } catch {
-    serve404(res);
-    return true;
-  }
+  /* Pfad-Sicherheit + 404 */
+  if (!abs.startsWith(PUBLIC_DIR)) { res.writeHead(403).end(); return true; }
+  if (!fs.existsSync(abs))         { streamFile(res, ERR404, "text/html", 404); return true; }
 
-  const mime = MIME_TYPES[path.extname(safe)] || "application/octet-stream";
-  streamFile(res, safe, mime);
+  const ext       = path.extname(abs);
+  const mime      = MIME_TYPES[ext] || "application/octet-stream";
+  const needsCors = [".js", ".mjs", ".json", ".wasm", ".html", ".css"].includes(ext);
+
+  streamFile(res, abs, mime, 200, needsCors);
   return true;
 }
 
-module.exports = {
-  streamFile,
-  serveLanding,
-  serve404,
-  serveStatic,
-  setSec // wird evtl. vom chatRouter genutzt
-};
+/* ---------- kleine Aliase für andere Module -------------- */
+const serveLanding = res => streamFile(res, LANDING, "text/html");
+const serve404     = res => streamFile(res, ERR404, "text/html", 404);
+
+module.exports = { serveStatic, serveLanding, serve404, setSec };

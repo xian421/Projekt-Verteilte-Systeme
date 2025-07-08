@@ -1,0 +1,25 @@
+/* ---------- frontend/styles/tokens.css ---------- */
+@layer tokens {
+  :root {
+    /* Farb-Grundwerte (HSL-Tripel) */
+    --clr-primary        : 220 90% 56%;
+    --clr-surface        : 0 0% 100%;
+    --clr-surface-border : 0 0% 0% / .12;
+    --clr-text           : 0 0% 15%;
+
+    /* Radien & Schatten */
+    --radius   : 1rem;
+    --shadow-s : 0 2px 12px rgb(16 30 54 / .08);
+    --shadow-l : 0 8px 24px rgb(0 0 0 / .15);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --clr-primary        : 205 100% 66%;
+      --clr-surface        : 0 0% 10%;
+      --clr-surface-border : 0 0% 100% / .12;
+      --clr-text           : 0 0% 98%;
+      --shadow-l           : 0 8px 24px rgb(0 0 0 / .40);
+    }
+  }
+}

@@ -36,7 +36,7 @@ module.exports = {
 
   /* Limits & Größen */
   MAX_HISTORY:         100,
-  RATE_LIMIT_COUNT:    20,        // Nachrichten
+  RATE_LIMIT_COUNT:    5,        // Nachrichten
   RATE_LIMIT_WINDOW:   10_000,    // ms
   BACKPRESSURE_LIMIT:  1 * 1024 * 1024, // 1 MiB
 

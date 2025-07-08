@@ -3,8 +3,8 @@
 // Zentraler In-Memory-Store für Räume + Hilfsfunktionen
 // ------------------------------------------------------------
 const { MAX_HISTORY, CLOSE_CODES, BACKPRESSURE_LIMIT } = require("./config");
-const { escapeHTML, log } = require("./utils");
-
+const { escapeHTML } = require("./utils");
+const logger         = require("./logger");
 /* --------------------------------------------------
    Metadaten + Laufzeit-Strukturen
 -------------------------------------------------- */
@@ -31,6 +31,18 @@ function ensureLiveRoom(hash) {
    Messaging-Helpers
 -------------------------------------------------- */
 const IP_SPAN_RE = /<span class="ip-info[^>]*>.*?<\/span>/g;
+
+// Nur an Admin-Socks senden (ohne History-Eintrag)
+function sendToAdmins(clientMap, payload) {
+  clientMap.forEach(set => set.forEach(sock => {
+    if (!sock.isAdmin) return;                       // nur Admins
+    if (sock.readyState !== sock.OPEN) return;
+    if (sock.bufferedAmount > BACKPRESSURE_LIMIT) {
+      sock.close(CLOSE_CODES.BACKPRESSURE, 'Backpressure'); return;
+    }
+    sock.send(payload);
+  }));
+}
 
 /* entfernt IP-Spans – funktioniert für HTML **und** JSON-Strings */
 function stripIpSpans(payload) {
@@ -74,7 +86,12 @@ function broadcastSystem(hash, text) {
 /* --------------------------------------------------
    IP-Bann & Blocklisten-Logik
 -------------------------------------------------- */
-function banIp(hash, ip) {
+/**
+ * banIp(hash, ip, { auto: boolean } = {})
+ *  auto === true  → auto-Ban wegen Spam
+ *  auto === false → manueller Ban durch Admin
+ */
+function banIp(hash, ip, { auto = false } = {}) {
   const meta = findRoom(hash); if (!meta) return;
   if (!meta.blocklist.includes(ip)) meta.blocklist.push(ip);
 
@@ -84,12 +101,25 @@ function banIp(hash, ip) {
   if (room.activeClients.has(ip)) {
     room.activeClients.get(ip)
         .forEach(sock => sock.close(CLOSE_CODES.BLOCKED, "IP auto-banned"));
-    room.activeClients.delete(ip);
+    //room.activeClients.delete(ip);
   }
-  broadcastSystem(hash,
-    `<span class="ip-info hidden">🚫 ${ip} automatisch gebannt (Spam)</span>`);
-  log(`🚫 ${ip} auto-ban wegen Spam`);
-}
+  
+  const msg = `<span class="ip-info hidden">🚫 ${ip} `
+            + (auto ? 'automatisch gebannt (Spam)' : 'manuell gebannt')
+            + '</span>';
+
+  // JSON-Objekt mit adminOnly-Flag
+  const payloadObj = { type: 'system', text: msg, adminOnly: true };
+  const payload    = JSON.stringify(payloadObj);
+
+  // → in History **behalten**
+  room.history.push(payload);
+  if (room.history.length > MAX_HISTORY) room.history.shift();
+
+  // → nur live an Admins senden
+  sendToAdmins(room.activeClients, payload);
+
+  logger.info(`🚫 ${ip} ${auto ? 'auto-ban' : 'manual ban'}`);}
 
 /* --------------------------------------------------
    Export
@@ -101,5 +131,6 @@ module.exports = {
   ensureLiveRoom,
   sendToAll,
   broadcastSystem,
-  banIp
+  banIp,
+  stripIpSpans
 };

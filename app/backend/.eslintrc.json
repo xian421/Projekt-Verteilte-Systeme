@@ -1,0 +1,19 @@
+{
+  "root": true,
+  "env": { "browser": true, "es2022": true },
+  "extends": ["eslint:recommended"],
+  "parserOptions": { "sourceType": "module" },
+  "plugins": ["jsdoc"],
+  "rules": {
+    "no-unused-vars": ["warn", { "args": "none" }],
+    "no-undef": "error",
+    "no-console": "off",
+    "jsdoc/require-jsdoc": ["warn", {
+      "require": {
+        "ClassDeclaration": true,
+        "MethodDefinition": true
+      }
+    }],
+    "jsdoc/valid-types": "warn"
+  }
+}
