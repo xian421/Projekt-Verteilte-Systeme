@@ -1,29 +1,35 @@
 // backend/lib/config.js
 /**
  * Zentrale Konfiguration des Chat-Servers.
- * Lädt Umgebungsvariablen via dotenv und wirft beim Fehlen harter Fehler.
+ * Lädt .env, validiert nur in production, liefert sonst Fallbacks.
  */
 require("dotenv").config();
-
 const crypto = require("crypto");
 const path   = require("path");
 
-// Pflicht-Variablen prüfen
-const { ADMIN_PASSWORD, PORT, NODE_ENV } = process.env;
-if (!ADMIN_PASSWORD) {
-  throw new Error("ADMIN_PASSWORD muss in der Umgebung definiert sein!");
-}
-if (!PORT) {
-  throw new Error("PORT muss in der Umgebung definiert sein!");
+const {
+  NODE_ENV,
+  ADMIN_PASSWORD: _pw,
+  PORT: _port
+} = process.env;
+
+// Nur in Production hart validieren:
+if (NODE_ENV === "production") {
+  if (!_pw)   throw new Error("ADMIN_PASSWORD muss in der Umgebung definiert sein!");
+  if (!_port) throw new Error("PORT muss in der Umgebung definiert sein!");
 }
 
-// Admin-Token aus Passwort ableiten
+// Fallback-Werte in Test/Development:
+const ADMIN_PASSWORD = _pw || "keule";
+const PORT           = Number(_port) || 4441;
+
+// Token aus Password ableiten
 const ADMIN_TOKEN = crypto
   .createHash("sha256")
   .update(ADMIN_PASSWORD)
   .digest("hex");
 
-// Verzeichnis-Pfade
+// Pfade
 const ROOT_DIR     = path.join(__dirname, "..", "..");
 const FRONTEND_DIR = path.join(ROOT_DIR, "frontend");
 const PUBLIC_DIR   =
@@ -32,21 +38,17 @@ const PUBLIC_DIR   =
     : FRONTEND_DIR;
 
 module.exports = {
-  // Server-Grundeinstellungen
-  PORT:           Number(PORT),
+  PORT,
   ADMIN_PASSWORD,
   ADMIN_TOKEN,
 
-  // Größen- und Zeitlimits
   MAX_HISTORY:        100,
-  RATE_LIMIT_COUNT:   5,          // Nachrichten pro Window
-  RATE_LIMIT_WINDOW:  10_000,     // ms
-  BACKPRESSURE_LIMIT: 1 * 1024**2, // 1 MiB
+  RATE_LIMIT_COUNT:   5,
+  RATE_LIMIT_WINDOW:  10_000,
+  BACKPRESSURE_LIMIT: 1 * 1024 * 1024,
 
-  // Validierungs-Regeln
   HASH_RE: /^[a-f0-9]{64}$/i,
 
-  // WebSocket-Close-Codes
   CLOSE_CODES: {
     BLOCKED:        4000,
     DUPLICATE:      4001,
@@ -57,7 +59,6 @@ module.exports = {
     ROOM_DELETED:   4006,
   },
 
-  // MIME-Typen für statische Dateien
   MIME_TYPES: {
     ".html": "text/html; charset=utf-8",
     ".js":   "text/javascript; charset=utf-8",
@@ -71,7 +72,6 @@ module.exports = {
     ".webp": "image/webp"
   },
 
-  // Öffentlicher Webroot
   PUBLIC_DIR,
   ROOT_DIR,
 };
