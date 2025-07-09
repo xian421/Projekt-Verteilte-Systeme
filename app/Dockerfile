@@ -19,7 +19,7 @@ FROM deps AS test-runner
 # Damit config.js in den Test-Modus geht:
 ENV NODE_ENV=test \
     ADMIN_PASSWORD=keule \
-    PORT=4441
+    PORT=8444
 
 WORKDIR /app
 
@@ -59,7 +59,7 @@ COPY backend/ ./
 # Frontend-Assets aus der Build-Stage übernehmen
 COPY --from=build-frontend /frontend/dist /app/frontend/dist
 
-EXPOSE 4441
+EXPOSE 8444
 
 # Startet /app/backend/index.js
 CMD ["node", "index.js"]

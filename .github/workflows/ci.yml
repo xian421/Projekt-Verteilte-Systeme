@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ADMIN_PASSWORD: keule
-      PORT: 4441
+      PORT: 8444
       NODE_ENV: test
     steps:
       - uses: actions/checkout@v3
