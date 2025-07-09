@@ -11,3 +11,4 @@ Die geforderten Dokumente finden sich an folgenden Stellen:
     - Das Dokument zur Angabe, wer was gemacht hat befindet sich ebenfalls im Ordner "app" (WerHatWasGemacht.md)
 
     - Das Video wird wie gefordert nicht über Moodle bereitgestellt, sondern ist unter diesem Link verfügbar:
+    https://drive.google.com/file/d/1qYQJJF6yWjJvTkCHEYQwq7J9I5YFSnOf/view?usp=share_link
