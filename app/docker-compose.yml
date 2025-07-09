@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "4441:4441"
+      - "8444:8444"
     # Umgebungsvariablen aus .env laden
     env_file:
       - .env
@@ -17,7 +17,7 @@ services:
       - chat-logs:/app/logs
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4441/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8444/"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -99,7 +99,7 @@ Der Chat-Server besteht aus:
    cd ../backend
    npm start
    ```
-5. Im Browser öffnen: `http://localhost:4441`
+5. Im Browser öffnen: `http://localhost:8444`
 
 ---
 
@@ -111,7 +111,7 @@ Alle Einstellungen im `backend/lib/config.js`:
 | ------------------- | -------------------------------------- | -------------------------------- |
 | `ADMIN_PASSWORD`    | Passwort für Admin-Login               | `keule`                          |
 | `ADMIN_TOKEN`       | SHA256 von `ADMIN_PASSWORD`            | erzeugt                          |
-| `PORT`              | HTTP-Server-Port                       | `4441`                           |
+| `PORT`              | HTTP-Server-Port                       | `8444`                           |
 | `PUBLIC_DIR`        | Pfad zu Frontend-Assets (Dev vs. Prod) | `frontend/` oder `frontend/dist` |
 | `MAX_HISTORY`       | Maximale Chat-Historie                 | `100`                            |
 | `RATE_LIMIT_COUNT`  | Anfragen/Sekunde pro IP                | `5`                              |
@@ -280,7 +280,7 @@ docker-compose.yml
   4. `production`: Prod-Deps + Assets
 * **docker-compose.yml**:
 
-  * Service `chat-app` auf Port 4441
+  * Service `chat-app` auf Port 8444
   * Healthcheck via `curl`
   * Volumen für Logs
   * Env-File `.env`, `NODE_ENV=production`
