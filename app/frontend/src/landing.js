@@ -6,9 +6,9 @@ function init() {
   form.addEventListener('submit', e => {
     e.preventDefault();
     const hash = input.value.trim().toLowerCase();
-    if (!/^[a-f0-9]{64}$/.test(hash)) return;            // Client-Side-Validation
+    if (!/^[a-f0-9]{64}$/.test(hash)) return;           
 
-    location.href = `/chat/${hash}`;                     // schönere URL ohne .html
+    location.href = `/chat/${hash}`;                     
   });
 }
 
