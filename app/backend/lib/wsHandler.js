@@ -118,8 +118,9 @@ function attachWss(wss) {
             clearTimeout(room.leaveTimers.get(ip));
             room.leaveTimers.delete(ip);
           } else {
-            broadcastSystem(hash, `👋 ${escapeHTML(name)} ist beigetreten`);
-          }
+            // IP-Span nur ins Payload packen
+            const label = `${escapeHTML(name)} <span class="ip-info">(${ip})</span>`;
+            broadcastSystem(hash, `👋 ${label} ist beigetreten`);          }
           break;
         }
         case "changeName": {
@@ -130,7 +131,7 @@ function attachWss(wss) {
             room.userNames.set(socket, { name: newName, ip });
             broadcastSystem(
               hash,
-              `${escapeHTML(oldName)} heißt jetzt ${escapeHTML(newName)}`
+              `✏️ ${escapeHTML(oldName)} heißt jetzt ${escapeHTML(newName)}`
             );
           }
           break;
@@ -141,7 +142,8 @@ function attachWss(wss) {
             hour: "2-digit",
             minute: "2-digit"
           });
-          const text = `[${ts}] ${escapeHTML(user.name)}: ${escapeHTML(pkg.message)}`;
+          const label = `${escapeHTML(user.name)} <span class="ip-info">(${ip})</span>`;
+          const text = `[${ts}] ${label}: ${escapeHTML(pkg.message)}`;
           room.history.push(text);
           if (room.history.length > 100) room.history.shift();
           sendToAll(room.activeClients, text);

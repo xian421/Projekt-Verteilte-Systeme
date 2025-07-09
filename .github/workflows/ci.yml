@@ -1,5 +1,4 @@
-# .github/workflows/backend-ci.yml
-name: Backend CI
+name: CI
 
 on:
   push:
@@ -10,13 +9,10 @@ on:
 jobs:
   test-backend:
     runs-on: ubuntu-latest
-
     env:
-      # Setze hier defaults, die config.js erwartet
       ADMIN_PASSWORD: keule
       PORT: 4441
-      NODE_ENV: test       # sorgt dafür, dass unser Throw in config.js übersprungen wird
-
+      NODE_ENV: test
     steps:
       - uses: actions/checkout@v3
 
@@ -25,25 +21,51 @@ jobs:
         with:
           node-version: '18'
 
-      - name: Cache Node modules
+      - name: Cache Backend Modules
         uses: actions/cache@v3
         with:
           path: app/backend/node_modules
-          key: ${{ runner.os }}-node-${{ hashFiles('app/backend/package-lock.json') }}
+          key: ${{ runner.os }}-node-backend-${{ hashFiles('app/backend/package-lock.json') }}
           restore-keys: |
-            ${{ runner.os }}-node-
+            ${{ runner.os }}-node-backend-
 
-      - name: Install Dependencies
+      - name: Install Backend Dependencies
         working-directory: app/backend
         run: npm install
 
-      - name: Start Server
+      - name: Start Backend Server (für Integrationstests)
         working-directory: app/backend
-        # Für den API-Integrationstest: Starte im Hintergrund
         run: |
           npm start &
           sleep 5
 
-      - name: Run Tests
+      - name: Run Backend Tests
         working-directory: app/backend
+        run: npm test
+
+  test-frontend:
+    needs: test-backend   # optional: warte, bis Backend-Tests durch sind
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Cache Frontend Modules
+        uses: actions/cache@v3
+        with:
+          path: app/frontend/node_modules
+          key: ${{ runner.os }}-node-frontend-${{ hashFiles('app/frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-frontend-
+
+      - name: Install Frontend Dependencies
+        working-directory: app/frontend
+        run: npm install
+
+      - name: Run Frontend Tests
+        working-directory: app/frontend
         run: npm test

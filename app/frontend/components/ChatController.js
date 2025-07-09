@@ -3,8 +3,6 @@ import { getBases } from "../utils/env.js";
 import * as API from "../api.js";
 import sanitize from "../utils/sanitize.js";
 
-const adminToken = localStorage.getItem('adminToken') || null;
-
 /**
  * Raum-Konfiguration, die ChatController erwartet.
  * @typedef {Object} RoomConfig
@@ -125,10 +123,12 @@ export default class ChatController {
     this.#ws.addEventListener('open', () => {
       // Name schon bekannt, aber noch nicht angemeldet?
       if (this.#userName && !this.#joined) {
+        const token = localStorage.getItem('adminToken');
+
         this.#ws.send(JSON.stringify({
           type: 'join',
           name: this.#userName,
-          token: adminToken
+          token: token || undefined
         }));
         this.#joined = true;
       }
@@ -172,7 +172,7 @@ export default class ChatController {
       this.#ws?.send(JSON.stringify({
         type : 'join',
         name,
-        token: adminToken
+        token: localStorage.getItem('adminToken') || undefined
       }));
     this.#joined = true;
     localStorage.setItem('chatName', name);

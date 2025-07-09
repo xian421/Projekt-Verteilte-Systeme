@@ -1,45 +1,18 @@
 === Verzeichnisstruktur ===
 .:
-Dockerfile
-README.md
-backend
-docker-compose.yml
-frontend
-projekt_dump.txt
-
-./backend:
-index.js
-lib
-package.json
-
-./backend/lib:
-admin.js
-apiRouter.js
-chatRouter.js
-config.js
-heartbeat.js
-httpUtils.js
-logger.js
-rateLimiter.js
-respond.js
-roomStore.js
-router.js
-staticServer.js
-utils.js
-wsHandler.js
-
-./frontend:
 api.js
 components
 img
+package.json
 pages
+projekt_dump.txt
 src
 styles
 tests
 utils
 utils.js
 
-./frontend/components:
+./components:
 AdminPanel.js
 ChatApp.js
 ChatController.js
@@ -49,28 +22,28 @@ admin.css
 chat-template.html
 chat.css
 
-./frontend/img:
+./img:
 admin-icon.png
 chat-icon.png
 
-./frontend/pages:
+./pages:
 404.html
 admin.html
 chat.html
 landing.html
 
-./frontend/src:
+./src:
 chat-router.js
 landing.js
 
-./frontend/styles:
+./styles:
 landing.css
 tokens.css
 
-./frontend/tests:
+./tests:
 sanitize.test.js
 
-./frontend/utils:
+./utils:
 bus.js
 env.js
 sanitize.js
@@ -82,1111 +55,7 @@ sanitize.js
 
 
 
---- ./backend/package.json ---
-
-{
-  "name": "chat-backend",
-  "version": "1.0.0",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-    },
-  "dependencies": {
-    "ws": "^8.13.0"
-  }
-}
-
-
---- ./backend/index.js ---
-
-// backend/index.js â€“ Einstiegspunkt
-// ---------------------------------
-const http = require("http");
-const { Server } = require("ws");
-const { PORT }   = require("./lib/config");
-
-const { serveStatic } = require("./lib/staticServer");
-const apiRouter  = require("./lib/apiRouter");
-const chatRouter = require("./lib/chatRouter");
-const attachWs   = require("./lib/wsHandler");
-const startHeartbeat = require("./lib/heartbeat");
-const logger         = require("./lib/logger");
-/* -------- CORSâ€‘Preflight global ------------------------- */
-function handleOptions(req, res) {
-  res.writeHead(204, {
-    "Access-Control-Allow-Origin":  "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Access-Control-Max-Age":       "86400"
-  }).end();
-}
-
-/* -------- HTTPâ€‘Server mit Routingâ€‘Kette ----------------- */
-const server = http.createServer((req, res) => {
-  if (req.method === "OPTIONS") return handleOptions(req, res);
-
-  // 1) API
-  if (apiRouter(req, res)) return;
-  if (res.headersSent)     return;          // â† schon beantwortet
-
-  // 2) Chatâ€‘Routing (HTMLâ€‘Shell)
-  if (chatRouter(req, res)) return;
-  if (res.headersSent)     return;
-
-  // 3) Statische Dateien oder 404
-  serveStatic(req, res);
-});
-
-/* -------- WebSocketâ€‘Server ------------------------------ */
-const wss = new Server({ server });
-attachWs(wss);
-const hb = startHeartbeat(wss);
-
-/* -------- Start & Graceful Shutdown --------------------- */
-server.listen(PORT, () => logger.info(`ğŸ’¬ Server lÃ¤uft auf Port ${PORT}`));
-
-process.on("SIGINT", () => {
-  logger.info("ğŸ‘‹ SIGINT â€“ shutdown");
-  clearInterval(hb);
-  wss.clients.forEach(s => s.terminate());
-  server.close(() => process.exit(0));
-});
-
-
---- ./backend/.eslintrc.json ---
-
-{
-  "root": true,
-  "env": { "browser": true, "es2022": true },
-  "extends": ["eslint:recommended"],
-  "parserOptions": { "sourceType": "module" },
-  "plugins": ["jsdoc"],
-  "rules": {
-    "no-unused-vars": ["warn", { "args": "none" }],
-    "no-undef": "error",
-    "no-console": "off",
-    "jsdoc/require-jsdoc": ["warn", {
-      "require": {
-        "ClassDeclaration": true,
-        "MethodDefinition": true
-      }
-    }],
-    "jsdoc/valid-types": "warn"
-  }
-}
-
-
---- ./backend/lib/respond.js ---
-
-// backend/lib/respond.js
-// ----------------------
-// Hilfsâ€‘Funktion, die **immer** JSON + CORS sendet
-// und true zurÃ¼ckliefert, damit nachfolgende Router
-// nicht mehr weiterarbeiten.
-
-const { setSec } = require("./staticServer");
-
-/**
- * json(res, status, obj) â†’ true
- *  â€¢ FÃ¼gt Sicherheitsâ€‘ und CORSâ€‘Header hinzu
- *  â€¢ Schickt JSONâ€‘Payload
- *  â€¢ Gibt true zurÃ¼ck, sodass der aufrufende Router
- *    signalisieren kann: â€Request erledigtâ€œ.
- */
-function json(res, status = 200, obj = {}) {
-  if (res.headersSent) return true;          // Doppelâ€‘Sends abfangen
-  setSec(res, true);                         // CORS + Security
-  res.writeHead(status, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(obj));
-  return true;
-}
-
-module.exports = { json };
-
-
---- ./backend/lib/utils.js ---
-
-// lib/utils.js
-// --------------------
-// Kleine, generische Helfer â€“ **ohne** Logging!
-
-const crypto = require("crypto");
-
-/* ZufÃ¤lliger 64â€‘stelliger Hash */
-const randHash = () => crypto.randomBytes(32).toString("hex");
-
-/* Minimales HTMLâ€‘Escape */
-function escapeHTML(str = "") {
-  return String(str).replace(/[&<>"'`]/g, c => ({
-    "&":"&amp;","<":"&lt;",">":"&gt;",
-    "\"":"&quot;","'":"&#39;","`":"&#96;"
-  }[c]));
-}
-
-module.exports = { randHash, escapeHTML };
-
-
---- ./backend/lib/heartbeat.js ---
-
-// lib/heartbeat.js
-// ------------------------------------------------------------
-// Heartbeatâ€‘Utility als austauschbare Funktion
-// ------------------------------------------------------------
-const logger = require("./logger");
-
-function startHeartbeat(wss, interval = 30_000) {
-  return setInterval(() => {
-    wss.clients.forEach(ws => {
-      if (ws.isAlive === false) {
-        logger.warn("Client stale â€“ terminating");
-        return ws.terminate();
-      }
-      ws.isAlive = false;
-      ws.ping();
-    });
-  }, interval);
-}
-
-module.exports = startHeartbeat;
-
-
---- ./backend/lib/roomStore.js ---
-
-// lib/roomStore.js
-// ------------------------------------------------------------
-// Zentraler In-Memory-Store fÃ¼r RÃ¤ume + Hilfsfunktionen
-// ------------------------------------------------------------
-const { MAX_HISTORY, CLOSE_CODES, BACKPRESSURE_LIMIT } = require("./config");
-const { escapeHTML } = require("./utils");
-const logger         = require("./logger");
-/* --------------------------------------------------
-   Metadaten + Laufzeit-Strukturen
--------------------------------------------------- */
-const roomsMeta = new Map();   // hash â†’ { name, blocklist }
-const liveRooms = new Map();   // hash â†’ runtime-Objekt
-
-const findRoom = hash => roomsMeta.get(hash);
-
-function ensureLiveRoom(hash) {
-  if (!liveRooms.has(hash)) {
-    liveRooms.set(hash, {
-      activeClients : new Map(),   // ip â†’ Set<socket>
-      userNames     : new WeakMap(),
-      ipNames       : new Map(),
-      leaveTimers   : new Map(),
-      history       : [],
-      blocklist     : findRoom(hash)?.blocklist || []
-    });
-  }
-  return liveRooms.get(hash);
-}
-
-/* --------------------------------------------------
-   Messaging-Helpers
--------------------------------------------------- */
-const IP_SPAN_RE = /<span class="ip-info[^>]*>.*?<\/span>/g;
-
-// Nur an Admin-Socks senden (ohne History-Eintrag)
-function sendToAdmins(clientMap, payload) {
-  clientMap.forEach(set => set.forEach(sock => {
-    if (!sock.isAdmin) return;                       // nur Admins
-    if (sock.readyState !== sock.OPEN) return;
-    if (sock.bufferedAmount > BACKPRESSURE_LIMIT) {
-      sock.close(CLOSE_CODES.BACKPRESSURE, 'Backpressure'); return;
-    }
-    sock.send(payload);
-  }));
-}
-
-/* entfernt IP-Spans â€“ funktioniert fÃ¼r HTML **und** JSON-Strings */
-function stripIpSpans(payload) {
-  if (typeof payload !== "string") return payload;
-
-  /* Fall 1: JSONâ€String mit {text:"â€¦"} */
-  if (payload.startsWith("{")) {
-    try {
-      const obj = JSON.parse(payload);
-      if (typeof obj.text === "string") obj.text = obj.text.replace(IP_SPAN_RE, "");
-      return JSON.stringify(obj);
-    } catch { /* Parsing fehlgeschlagen â€“ weiter zu Plain-HTML */ }
-  }
-
-  /* Fall 2: Plain-HTML */
-  return payload.replace(IP_SPAN_RE, "");
-}
-
-/* â€” Broadcast an alle Sockets im Raum â€” */
-function sendToAll(clientMap, payload) {
-  clientMap.forEach(set => set.forEach(socket => {
-    if (socket.bufferedAmount > BACKPRESSURE_LIMIT) {
-      socket.close(CLOSE_CODES.BACKPRESSURE, "Backpressure"); return;
-    }
-    if (socket.readyState !== socket.OPEN) return;
-
-    const out = socket.isAdmin ? payload : stripIpSpans(payload);
-    socket.send(out);
-  }));
-}
-
-/* System-Nachrichten */
-function broadcastSystem(hash, text) {
-  const room = liveRooms.get(hash); if (!room) return;
-  const payload = JSON.stringify({ type: "system", text });
-  room.history.push(payload);
-  if (room.history.length > MAX_HISTORY) room.history.shift();
-  sendToAll(room.activeClients, payload);
-}
-
-/* --------------------------------------------------
-   IP-Bann & Blocklisten-Logik
--------------------------------------------------- */
-/**
- * banIp(hash, ip, { auto: boolean } = {})
- *  auto === true  â†’ auto-Ban wegen Spam
- *  auto === false â†’ manueller Ban durch Admin
- */
-function banIp(hash, ip, { auto = false } = {}) {
-  const meta = findRoom(hash); if (!meta) return;
-  if (!meta.blocklist.includes(ip)) meta.blocklist.push(ip);
-
-  const room = ensureLiveRoom(hash);
-  room.blocklist = meta.blocklist;
-
-  if (room.activeClients.has(ip)) {
-    room.activeClients.get(ip)
-        .forEach(sock => sock.close(CLOSE_CODES.BLOCKED, "IP auto-banned"));
-    //room.activeClients.delete(ip);
-  }
-  
-  const msg = `<span class="ip-info hidden">ğŸš« ${ip} `
-            + (auto ? 'automatisch gebannt (Spam)' : 'manuell gebannt')
-            + '</span>';
-
-  // JSON-Objekt mit adminOnly-Flag
-  const payloadObj = { type: 'system', text: msg, adminOnly: true };
-  const payload    = JSON.stringify(payloadObj);
-
-  // â†’ in History **behalten**
-  room.history.push(payload);
-  if (room.history.length > MAX_HISTORY) room.history.shift();
-
-  // â†’ nur live an Admins senden
-  sendToAdmins(room.activeClients, payload);
-
-  logger.info(`ğŸš« ${ip} ${auto ? 'auto-ban' : 'manual ban'}`);}
-
-/* --------------------------------------------------
-   Export
--------------------------------------------------- */
-module.exports = {
-  roomsMeta,
-  liveRooms,
-  findRoom,
-  ensureLiveRoom,
-  sendToAll,
-  broadcastSystem,
-  banIp,
-  stripIpSpans
-};
-
-
---- ./backend/lib/apiRouter.js ---
-
-// backend/lib/apiRouter.js
-// ----------------
-// Admin-APIs.  Nur noch Daten-/Logik-Code â€“ Routing-Boilerplate Ã¼bernimmt Router()
-
-const Router = require("./router");
-const { sendJSON, collectJSON } = require("./httpUtils");
-const { randHash } = require("./utils");
-const logger = require("./logger");
-const { ADMIN_PASSWORD } = require("./config");
-const { requireAdmin } = require("./admin");         // â† neu
-
-const {
-  roomsMeta,
-  liveRooms,
-  findRoom,
-  ensureLiveRoom,
-  banIp
-} = require("./roomStore");
-
-const router = new Router();
-
-// ---------- POST /admin/login --------------------------
-router.post("/admin/login", (req, res) =>
-  collectJSON(req, res, ({ password }) => {
-    if (password !== ADMIN_PASSWORD)
-      return sendJSON(res, 403, { ok: false, error: "Falsches Passwort" });
-    // Token wird aus der Config gelesen
-    const { ADMIN_TOKEN } = require("./config");
-    sendJSON(res, 200, { ok: true, data: { token: ADMIN_TOKEN } });
-  })
-);
-
-// ---------- GET  /rooms.json ---------------------------
-router.get("/rooms.json", (_req, res) => {
-  const list = Array.from(roomsMeta, ([hash, { name }]) => ({ hash, name }));
-  sendJSON(res, 200, { ok: true, data: list });
-});
-
-// ---------- GET  /blocklist.json -----------------------
-router.get("/blocklist.json", (req, res) => {
-  const roomHash = new URL(req.url, `http://${req.headers.host}`)
-                     .searchParams.get("room");
-  const room = findRoom(roomHash);
-  sendJSON(res, 200, { ok: true, data: room ? room.blocklist : [] });
-});
-
-// ---------- POST /admin/add-room -----------------------
-router.post(
-  "/admin/add-room",
-  requireAdmin(({ name }, _req, res) => {
-    if (!name) return sendJSON(res, 400, { ok: false, error: "Name fehlt" });
-    const hash = randHash();
-    roomsMeta.set(hash, { hash, name: name.trim(), blocklist: [] });
-    logger.info(`â• Raum angelegt: ${name} (${hash})`);
-    sendJSON(res, 200, { ok: true, data: { hash, name: name.trim() } });
-  })
-);
-
-// ---------- POST /admin/remove-room --------------------
-router.post(
-  "/admin/remove-room",
-  requireAdmin(({ hash }, _req, res) => {
-    const room = liveRooms.get(hash);
-    if (room) {
-      room.activeClients.forEach(set =>
-        set.forEach(sock =>
-          sock.close(require("./config").CLOSE_CODES.ROOM_DELETED, "Room deleted")
-        )
-      );
-      liveRooms.delete(hash);
-    }
-    roomsMeta.delete(hash);
-    logger.info(`ğŸ—‘ï¸  Raum entfernt: ${hash}`);
-    sendJSON(res, 200, { ok: true });
-  })
-);
-
-// ---------- POST /admin/update-blocklist ---------------
-router.post(
-  "/admin/update-blocklist",
-  requireAdmin(({ hash, list }, _req, res) => {
-    const meta = findRoom(hash);
-    if (!meta || !Array.isArray(list))
-      return sendJSON(res, 400, { ok: false, error: "UngÃ¼ltige Daten" });
-
-    // Alte Blockliste merken
-    const oldList = Array.isArray(meta.blocklist) ? [...meta.blocklist] : [];
-
-    // Neue Blockliste Ã¼bernehmen
-    meta.blocklist = list;
-    const room = ensureLiveRoom(hash);
-    room.blocklist = list;
-
-    // Nur wirklich neu hinzugefÃ¼gte IPs bannen
-    const toBan = list.filter(ip => !oldList.includes(ip));
-    toBan.forEach(ip => banIp(hash, ip));
-
-    logger.info(`ğŸš« Blockliste aktualisiert fÃ¼r Raum ${hash}`);
-    sendJSON(res, 200, { ok: true });
-  })
-);
-
-module.exports = router.handle.bind(router);
-
-
---- ./backend/lib/httpUtils.js ---
-
-// lib/httpUtils.js
-// ----------------
-// Gemeinsame HTTPâ€‘Utilities: Securityâ€‘Header, JSONâ€‘Antwort, Bodyâ€‘Parser,
-// URLâ€‘Normalisierung.
-
-const { pipeline } = require("stream");
-const fs   = require("fs");
-const path = require("path");
-const { PUBLIC_DIR, MIME_TYPES } = require("./config");
-
-/* ---------- Securityâ€‘Header ---------------------------- */
-function setSec(res, allowCors = false) {
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader(
-    "Cross-Origin-Resource-Policy",
-    allowCors ? "cross-origin" : "same-origin"
-  );
-
-  if (allowCors) {
-    res.setHeader("Access-Control-Allow-Origin",  "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers","Content-Type, Authorization");
-  }
-}
-
-/* ---------- JSONâ€‘Antwort ------------------------------- */
-function sendJSON(res, status = 200, obj = {}) {
-  if (res.headersSent) return true;
-  setSec(res, true);
-  res.writeHead(status, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(obj));
-  return true;
-}
-
-/* ---------- Body einlesen ------------------------------ */
-function collectJSON(req, res, cb) {
-  let body = "";
-  req.on("data", chunk => (body += chunk));
-  req.on("end", () => {
-    try { cb(JSON.parse(body || "{}")); }
-    catch { sendJSON(res, 400, { ok:false, error:"Bad JSON" }); }
-  });
-  return true;
-}
-
-/* ---------- HilfsÂ­funktion: URLâ€“Pfad -------------------- */
-function normPath(req) {
-  return new URL(req.url, `http://${req.headers.host}`)
-           .pathname.replace(/\/{2,}/g, "/")
-           .replace(/\/$/, "") || "/";
-}
-
-/* ---------- Datei streamen (fÃ¼r staticServer u.a.) ------ */
-function streamFile(
-  res, absPath,
-  code = 200,
-  mime = MIME_TYPES[path.extname(absPath)] || "application/octet-stream",
-  allowCors = false
-) {
-  setSec(res, allowCors);
-  res.writeHead(code, { "Content-Type": mime });
-  pipeline(fs.createReadStream(absPath), res, err => {
-    if (err && !res.headersSent) res.writeHead(500).end("Fehler");
-  });
-}
-
-module.exports = { setSec, sendJSON, collectJSON, normPath, streamFile };
-
-
---- ./backend/lib/logger.js ---
-
-// lib/logger.js
-// -------------
-// Miniâ€‘Logger mit EventEmitter.  Zentralisiert KonsolenÂ­ausgaben.
-
-const { EventEmitter } = require("events");
-
-class Logger extends EventEmitter {
-  #prefix(level) {
-    const ts = new Date().toISOString().slice(11, 19);
-    return `[${ts}] ${level.toUpperCase()}:`;
-  }
-
-  info (...args) { console.log (this.#prefix("info"), ...args);  this.emit("info",  ...args); }
-  warn (...args) { console.warn(this.#prefix("warn"), ...args);  this.emit("warn",  ...args); }
-  error(...args) { console.error(this.#prefix("err"), ...args);  this.emit("error", ...args); }
-}
-
-module.exports = new Logger();
-
-
---- ./backend/lib/config.js ---
-
-// backend/lib/config.js
-// Zentrale Konfiguration des Chat-Servers
-// ---------------------------------------
-// Nur hier Limits / Ports / Paths Ã¤ndern!
-
-const crypto = require("crypto");
-const path   = require("path");
-
-/* â”€â”€â”€â”€â”€ 1 | Admin-Token â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "keule";
-const ADMIN_TOKEN    = crypto
-  .createHash("sha256")
-  .update(ADMIN_PASSWORD)
-  .digest("hex");
-
-/* â”€â”€â”€â”€â”€ 2 | Projekt-Verzeichnisse â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
- *
- *  /app                 â† WORKDIR im Docker-Container
- *   â”œâ”€ backend/         â† Node-Quellcode
- *   â””â”€ frontend/        â† rohe Assets  (Entwicklung)
- *        â””â”€ dist/       â† gebaute Assets (Production-Build)
- */
-const ROOT_DIR      = path.join(__dirname, "..", "..");
-const FRONTEND_DIR  = path.join(ROOT_DIR, "frontend");
-const PUBLIC_DIR    =
-  process.env.NODE_ENV === "production"
-    ? path.join(FRONTEND_DIR, "dist")
-    : FRONTEND_DIR;
-
-/* â”€â”€â”€â”€â”€ 3 | Export â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-module.exports = {
-  /* Basis */
-  PORT: Number(process.env.PORT) || 4441,
-  ADMIN_PASSWORD,
-  ADMIN_TOKEN,
-
-  /* Limits & GrÃ¶ÃŸen */
-  MAX_HISTORY:         100,
-  RATE_LIMIT_COUNT:    5,        // Nachrichten
-  RATE_LIMIT_WINDOW:   10_000,    // ms
-  BACKPRESSURE_LIMIT:  1 * 1024 * 1024, // 1 MiB
-
-  /* Regex & Hash-LÃ¤nge */
-  HASH_RE: /^[a-f0-9]{64}$/i,
-
-  /* WebSocket-Close-Codes */
-  CLOSE_CODES: {
-    BLOCKED:        4000,
-    DUPLICATE:      4001,
-    UNKNOWN_ROOM:   4002,
-    INVALID_PACKET: 4003,
-    RATE_LIMIT:     4004,
-    BACKPRESSURE:   4005,
-    ROOM_DELETED:   4006,
-  },
-
-  /* MIME-Typen fÃ¼r statische Dateien */
-  MIME_TYPES: {
-    ".html": "text/html; charset=utf-8",
-    ".js":   "text/javascript; charset=utf-8",
-    ".json": "application/json; charset=utf-8",
-    ".css":  "text/css; charset=utf-8",
-    ".png":  "image/png",
-    ".jpg":  "image/jpeg",
-    ".svg":  "image/svg+xml",
-    ".woff": "font/woff",
-    ".woff2":"font/woff2",
-    ".webp": "image/webp"
-  },
-
-  /* Ã–ffentlicher Webroot (siehe oben) */
-  PUBLIC_DIR,
-  ROOT_DIR,
-};
-
-
---- ./backend/lib/staticServer.js ---
-
-// backend/lib/staticServer.js
-// ------------------------------------------------------------
-//  â€¢ Liefert Landing, Admin, Assets &Â 404 aus PUBLIC_DIR
-//  â€¢ Nutzt gemeinsame Utilities aus httpUtils.js
-// ------------------------------------------------------------
-const fs   = require("fs");
-const path = require("path");
-
-const { PUBLIC_DIR } = require("./config");
-const { setSec, streamFile, normPath } = require("./httpUtils");
-
-/* ---------- Pfade zu Standardâ€‘Seiten --------------------- */
-const LANDING = path.join(PUBLIC_DIR, "pages", "landing.html");
-const ERR404  = path.join(PUBLIC_DIR, "404.html");
-const ADMIN   = path.join(PUBLIC_DIR, "pages", "admin.html");
-
-/* ---------- Hauptâ€‘Staticâ€‘Router -------------------------- */
-function serveStatic(req, res) {
-  const urlPath = normPath(req);
-
-  /* feste Seiten */
-  if (urlPath === "/admin" || urlPath === "/admin.html")
-    return streamFile(res, ADMIN, 200, "text/html");
-  if (urlPath === "/dashboard" || urlPath === "/index.html")
-    return streamFile(res, path.join(PUBLIC_DIR, "index.html"), 200, "text/html");
-  if (urlPath === "/")
-    return streamFile(res, LANDING, 200, "text/html");
-  if (urlPath === "/404")
-    return streamFile(res, ERR404, 404, "text/html");
-
-  /* Assets */
-  const rel = path.normalize(urlPath).replace(/^\/+/, "");
-  const abs = path.join(PUBLIC_DIR, rel);
-
-  /* Pfadâ€‘Sicherheit + 404 */
-  if (!abs.startsWith(PUBLIC_DIR)) { res.writeHead(403).end(); return true; }
-  if (!fs.existsSync(abs))         { streamFile(res, ERR404, 404, "text/html"); return true; }
-
-  /* CORS nur fÃ¼r typische Webâ€‘Assets */
-  const needsCors = [".js",".mjs",".json",".wasm",".html",".css"].includes(path.extname(abs));
-  streamFile(res, abs, 200, undefined, needsCors);
-  return true;
-}
-
-/* ---------- Aliase fÃ¼r andere Module --------------------- */
-const serveLanding = res => streamFile(res, LANDING, 200, "text/html");
-const serve404     = res => streamFile(res, ERR404, 404, "text/html");
-
-module.exports = { serveStatic, serveLanding, serve404, setSec };
-
-
---- ./backend/lib/wsHandler.js ---
-
-// lib/wsHandler.js
-// ------------------------------------------------------------
-// Kapselt alle WebSocket-Operationen:
-//  â€¢ Verbindung aufnehmen
-//  â€¢ Nachrichten verarbeiten (Join, Chat, NamensÃ¤nderung)
-//  â€¢ Rate-Limit + Auto-Ban
-//  â€¢ Backpressure-Guard geschieht in roomStore.sendToAll
-// ------------------------------------------------------------
-const { Server } = require("ws");
-const {
-  HASH_RE, CLOSE_CODES
-} = require("./config");
-const {
-  findRoom, ensureLiveRoom, sendToAll,
-  broadcastSystem, banIp, stripIpSpans
-} = require("./roomStore");
-const rateLimiter = require("./rateLimiter");
-const logger      = require("./logger");
-const { escapeHTML } = require("./utils");
-
-/* ---------------- Paket-Validation ----------------------- */
-function isValidPacket(pkg) {
-  if (!pkg || typeof pkg !== "object") return false;
-  switch (pkg.type) {
-    case "join":       return typeof pkg.name    === "string" && pkg.name.trim();
-    case "changeName": return typeof pkg.newName === "string" && pkg.newName.trim();
-    case "chat":       return typeof pkg.message === "string" && pkg.message.trim();
-    default:           return false;
-  }
-}
-
-/* ---------------- Haupt-Funktion ------------------------- */
-/**
- * attachWss(wss)
- *   - wss: Instanz von new Server({ server })
- *   - FÃ¼gt 'connection' + Heartbeat-Handling hinzu
- */
-function attachWss(wss) {
-  wss.on("connection", (socket, req) => {
-    // 1. Heartbeat-Flag setzen
-    socket.isAlive = true;
-    socket.on("pong", () => (socket.isAlive = true));
-
-    // 2. Hash & IP ermitteln
-    const hash = (req.url || "").replace(/^\/+/, "").toLowerCase();
-    let ip     = (req.headers["x-forwarded-for"] || req.socket.remoteAddress)
-                   .replace(/^.*:/, "");
-    if (ip.startsWith("ffff:")) ip = ip.slice(5);
-    ip = ip.replace(/^f{4}:0{1,4}:/i, "");
-
-    // 3. GrundprÃ¼fungen
-    if (!HASH_RE.test(hash) || !findRoom(hash)) {
-      return socket.close(CLOSE_CODES.UNKNOWN_ROOM, "Unknown room");
-    }
-    if (ensureLiveRoom(hash).blocklist.includes(ip)) {
-      return socket.close(CLOSE_CODES.BLOCKED, "IP blocked");
-    }
-
-    const room = ensureLiveRoom(hash);
-    if (room.activeClients.has(ip) && !room.leaveTimers.has(ip)) {
-      return socket.close(CLOSE_CODES.DUPLICATE, "Duplicate connection");
-    }
-
-    // 4. Client registrieren  â€“ History NICHT mehr hier senden
-    (room.activeClients.get(ip) ?? room.activeClients.set(ip, new Set()).get(ip))
-      .add(socket);
-
-    /* ---------- Nachricht-Handler ----------------------- */
-    socket.on("message", raw => {
-      let pkg;
-      try { pkg = JSON.parse(raw); } catch {
-        return socket.close(CLOSE_CODES.INVALID_PACKET, "Invalid JSON");
-      }
-      if (!isValidPacket(pkg))
-        return socket.close(CLOSE_CODES.INVALID_PACKET, "Invalid packet");
-
-      // Rate-Limit + Auto-Ban
-      if (!rateLimiter.allowed(ip)) {
-        banIp(hash, ip, { auto: true });        // â† Flag setzen
-        return socket.close(CLOSE_CODES.RATE_LIMIT, "Rate limit exceeded");
-      }
-      if (room.blocklist.includes(ip))
-        return socket.close(CLOSE_CODES.BLOCKED, "IP blocked");
-
-      /* --- Switch je Packet-Type ----------------------- */
-      switch (pkg.type) {
-        case "join": {
-          const name = pkg.name.trim().slice(0, 30);
-          const isAdmin = pkg.token === require("./config").ADMIN_TOKEN;
-          room.ipNames.set(ip, name);
-          room.userNames.set(socket, { name, ip });
-          socket.isAdmin = isAdmin;
-
-          // âœ Verlauf jetzt nachreichen
-          room.history.forEach(msg => {
-            if (socket.isAdmin) {            // Admin sieht alles
-              socket.send(msg); return;
-            }
-            try {
-              const obj = JSON.parse(msg);
-              if (obj.adminOnly) return;     // Ã¼berspringen
-            } catch {/* plain HTML â€“ durchlassen */}
-
-            socket.send(stripIpSpans(msg));  // IPs raus fÃ¼r normale Nutzer
-          });
-
-          if (room.leaveTimers.has(ip)) {
-            clearTimeout(room.leaveTimers.get(ip));
-            room.leaveTimers.delete(ip);
-          } else {
-            broadcastSystem(hash,
-              `ğŸ‘‹ ${escapeHTML(name)}<span class="ip-info hidden"> (${ip})</span> ist beigetreten`);
-          }
-          break;
-        }
-        case "changeName": {
-          const newName = pkg.newName.trim().slice(0, 30);
-          const oldName = room.ipNames.get(ip) || ip;
-          if (newName !== oldName) {
-            room.ipNames.set(ip, newName);
-            room.userNames.set(socket, { name: newName, ip });
-            broadcastSystem(hash,
-              `<span class="ip-info hidden"> (${ip})</span>âœï¸ ${escapeHTML(oldName)} heiÃŸt jetzt ${escapeHTML(newName)}`);
-          }
-          break;
-        }
-        case "chat": {
-          const user = room.userNames.get(socket) || { name: room.ipNames.get(ip) || "?" };
-          const ts = new Date().toLocaleTimeString("de-DE", { hour:"2-digit", minute:"2-digit" });
-          const text = `[${ts}] ${escapeHTML(user.name)}<span class="ip-info hidden"> (${ip})</span>: `
-                     + escapeHTML(pkg.message);
-          room.history.push(text);
-          if (room.history.length > 100) room.history.shift();
-          sendToAll(room.activeClients, text);
-          break;
-        }
-      }
-    });
-
-    /* ---------- Verbindungsende ------------------------- */
-    socket.on("close", () => {
-      logger.info(`Socket close (${ip})`);
-      room.activeClients.get(ip)?.delete(socket);
-      if (room.activeClients.get(ip)?.size === 0) {
-        const t = setTimeout(() => {
-          room.activeClients.delete(ip);
-          const name = room.ipNames.get(ip) || ip;
-          broadcastSystem(hash,
-            `ğŸšª ${escapeHTML(name)} <span class="ip-info hidden"> (${ip})</span> hat den Chat verlassen`);
-          room.ipNames.delete(ip); room.leaveTimers.delete(ip);
-        }, 3000);
-        room.leaveTimers.set(ip, t);
-      }
-    });
-  });
-}
-
-module.exports = attachWss;
-
-
---- ./backend/lib/chatRouter.js ---
-
-// backend/lib/chatRouter.js
-// ------------------------------------------------------------
-//  â€¢ "/" , "/chat" , "/chat.html"            â†’ Landing
-//  â€¢ "/chat/<64â€‘hash>" (oder ...html/<hash>) â†’ Chatâ€‘Shell
-//  â€¢ alles andere unter /chatâ€¦               â†’ Landingâ€‘Fallback
-// ------------------------------------------------------------
-const path = require("path");
-const { URL } = require("url");
-
-const { PUBLIC_DIR } = require("./config");
-const { serveLanding } = require("./staticServer");
-const { findRoom }     = require("./roomStore");
-const { streamFile, normPath } = require("./httpUtils");
-
-/* Statische Chatâ€‘HTMLâ€‘Shell */
-const CHAT_HTML = path.join(PUBLIC_DIR, "pages", "chat.html");
-
-function chatRouter(req, res) {
-  const url       = new URL(req.url, `http://${req.headers.host}`);
-  const pathname  = normPath(req);
-
-  /* ---------- 0 | ?room=<hash> â†’ Redirect ---------------- */
-  const qHash = url.searchParams.get("room");
-  if (qHash && /^[a-f0-9]{64}$/i.test(qHash)) {
-    if (!findRoom(qHash.toLowerCase())) return false;   // unbekannter Raum
-    res.writeHead(302, { Location:`/chat/${qHash.toLowerCase()}` }).end();
-    return true;
-  }
-
-  /* ---------- 1 | Landingâ€‘Routen ------------------------- */
-  if (pathname === "/" || pathname === "/chat" || pathname === "/chat.html") {
-    serveLanding(res); return true;
-  }
-
-  /* ---------- 2 | Chatâ€‘Shell mit Hash ------------------- */
-  const match = /^\/chat(?:\.html)?\/([a-f0-9]{64})$/i.exec(pathname);
-  if (match) {
-    const hash = match[1].toLowerCase();
-    if (!findRoom(hash)) return false;                  // 404 an nÃ¤chsten Router
-    streamFile(res, CHAT_HTML, 200, "text/html");
-    return true;
-  }
-
-  /* ---------- 3 | Alles unter /chatâ€¦ â†’ Landing ---------- */
-  if (pathname.startsWith("/chat/") || pathname.startsWith("/chat.html/")) {
-    serveLanding(res); return true;
-  }
-
-  /* ---------- 4 | Kein Match â†’ andere Router ------------ */
-  return false;
-}
-
-module.exports = chatRouter;
-
-
---- ./backend/lib/admin.js ---
-
-// backend/lib/admin.js
-// -----------------
-// Middleware zur PrÃ¼fung des Admin-Tokens
-
-const { collectJSON, sendJSON } = require("./httpUtils");
-const { ADMIN_TOKEN } = require("./config");
-
-/**
- * requireAdmin: Wrappt einen Handler und prÃ¼ft vorab auf gÃ¼ltiges Admin-Token.
- * Handler erhÃ¤lt als erstes Argument den geparsten Body,
- * dann req und res.
- */
-function requireAdmin(handler) {
-  return (req, res) =>
-    collectJSON(req, res, (body) => {
-      if (body.token !== ADMIN_TOKEN) {
-        return sendJSON(res, 403, { ok: false, error: "Forbidden: Admins only" });
-      }
-      return handler(body, req, res);
-    });
-}
-
-module.exports = { requireAdmin };
-
-
---- ./backend/lib/rateLimiter.js ---
-
-// lib/rateLimiter.js
-// ------------------------------------------------------------
-// Konfigurierbares Slidingâ€‘Windowâ€‘Rateâ€‘Limiterâ€‘Objekt
-// ------------------------------------------------------------
-const { RATE_LIMIT_COUNT, RATE_LIMIT_WINDOW } = require("./config");
-const logger = require("./logger");
-
-class RateLimiter {
-  constructor(maxCount, windowMs) {
-    this.MAX = maxCount;
-    this.WIN = windowMs;
-    this.state = new Map();         // ip â†’ {count, start}
-  }
-
-  allowed(ip) {
-    const now  = Date.now();
-    const rec  = this.state.get(ip) || { count: 0, start: now };
-
-    if (now - rec.start > this.WIN) { rec.count = 0; rec.start = now; }
-    rec.count += 1;
-    this.state.set(ip, rec);
-
-    const ok = rec.count <= this.MAX;
-    if (!ok) logger.warn(`Rateâ€‘Limit: ${ip} blocked (${rec.count}/${this.MAX})`);
-    return ok;
-  }
-}
-
-/* Defaultâ€‘Instanz â€“ kann im Test ersetzt werden */
-module.exports = new RateLimiter(RATE_LIMIT_COUNT, RATE_LIMIT_WINDOW);
-module.exports.RateLimiter = RateLimiter;          // Export der Klasse selbst
-
-
---- ./backend/lib/router.js ---
-
-// lib/router.js
-// -------------
-// Miniâ€‘Router: Pfad + Method -> Handler
-
-const { normPath } = require("./httpUtils");
-
-class Router {
-  #routes = [];                       // [{method, path, handler}]
-
-  add(method, path, handler) {
-    this.#routes.push({ method, path, handler });
-    return this;                      // Chainable
-  }
-  get(path, h)  { return this.add("GET",  path, h); }
-  post(path, h) { return this.add("POST", path, h); }
-
-  handle(req, res) {
-    const p = normPath(req);
-    for (const r of this.#routes) {
-      if (r.method === req.method && r.path === p) {
-        return r.handler(req, res);   // Handler entscheidet, was passiert
-      }
-    }
-    return false;                     // nichts gepasst
-  }
-}
-
-module.exports = Router;
-
-
---- ./Dockerfile ---
-
-# Multi-stage Dockerfile fÃ¼r Chat-System
-# ========================================
-
-### 1. Build-Stage (Vorbereitung fÃ¼r kÃ¼nftige Build-Steps) ###
-FROM node:18 as build
-
-WORKDIR /frontend
-COPY frontend/ .
-
-# FÃ¼r spÃ¤ter: npm ci && npm run build
-# Aktuell: nur kopieren, da noch kein Build-System
-RUN mkdir -p dist && cp -r * dist/ 2>/dev/null || true
-
-### 2. Runtime-Stage ###
-FROM node:18
-
-WORKDIR /app
-
-# Backend kopieren und Dependencies installieren
-COPY backend ./backend
-RUN cd backend && npm install --production
-
-# Frontend (spÃ¤ter: nur gebaute Assets aus Build-Stage)
-COPY --from=build /frontend/dist ./frontend/dist
-
-# Port freigeben
-EXPOSE 4441
-
-# Startkommando
-CMD ["node", "backend/index.js"]
-
-
---- ./README.md ---
-
-# Chat System - Produktive Version
-
-## ğŸ“ Projektstruktur
-
-```
-/app
-â”œâ”€ backend/         â† Server-Code
-â”‚  â”œâ”€ index.js      â† Haupteingang
-â”‚  â”œâ”€ package.json
-â”‚  â””â”€ lib/          â† Module (WebSocket, Static, API)
-â””â”€ frontend/        â† Client-Code  
-   â”œâ”€ components/   â† Chat & Admin Web Components
-   â”œâ”€ pages/        â† Einzelseiten (/chat.html, /admin.html)
-   â””â”€ index.html    â† Dashboard (fÃ¼r /dashboard oder /)
-```
-
-## ğŸš€ Verwendung
-
-### Development
-```bash
-cd app/backend
-npm install
-npm start
-```
-
-### Production (Docker)
-```bash
-# Komplettes System bauen und starten
-docker-compose up --build
-
-# Im Hintergrund
-docker-compose up -d --build
-
-# Logs anzeigen
-docker-compose logs -f
-```
-
-## ğŸŒ Routen
-
-- `/` oder `/dashboard` â†’ Dashboard mit Navigation
-- `/chat.html` â†’ Chat-Interface
-- `/admin.html` â†’ Admin-Panel
-- `/api/rooms` â†’ JSON-API fÃ¼r RÃ¤ume
-
-## âœ¨ Features
-
-### CSS-HÃ¤rtung
-- Container-Queries statt Media-Queries
-- Flexible Layout-Komponenten
-- Responsive Design in jeder Containerbreite
-
-### Token-basierter Chat-Zugang
-- Ohne Room-Hash: Token-Eingabe erforderlich
-- Mit Hash: Direkter Chat-Zugang
-- Robust gegen URL-Manipulation
-
-### Multi-Stage Docker Build
-- Vorbereitet fÃ¼r Build-Tools (Vite, etc.)
-- Optimierte Production-Images
-- Getrennte Dependencies
-
-## ğŸ”§ Erweiterungen
-
-FÃ¼r Build-System (Vite/Webpack) in frontend/:
-```json
-{
-  "scripts": {
-    "build": "vite build",
-    "preview": "vite preview"
-  }
-}
-```
-
-Dann Dockerfile Build-Stage aktivieren:
-```dockerfile
-RUN npm ci && npm run build    # statt cp -r . dist/
-```
-
-
---- ./docker-compose.yml ---
-
-# Docker Compose fÃ¼r Chat-System
-# ==============================
-version: '3.8'
-
-services:
-  chat-app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    ports:
-      - "4441:4441"
-    environment:
-      - NODE_ENV=production
-      - PORT=4441
-    volumes:
-      # FÃ¼r Development: Live-Reload
-      # - ./app/backend:/app/backend
-      # - ./app/frontend:/app/frontend
-      
-      # FÃ¼r Production: nur Logs persistent
-      - chat-logs:/app/logs
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4441/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
-volumes:
-  chat-logs:
-    driver: local
-
-
---- ./frontend/components/AdminPanel.js ---
+--- ./components/AdminPanel.js ---
 
 // frontend/components/AdminPanel.js
 // ---------------------------------
@@ -1510,7 +379,7 @@ export default class ChatAdmin extends HTMLElement {
 customElements.define("chat-admin", ChatAdmin);
 
 
---- ./frontend/components/chat-template.html ---
+--- ./components/chat-template.html ---
 
 <!-- chat-template.html -->
 
@@ -1562,7 +431,7 @@ customElements.define("chat-admin", ChatAdmin);
 </main>
 
 
---- ./frontend/components/ChatController.js ---
+--- ./components/ChatController.js ---
 
 /* ChatController â€“ reine Business-Logik (ohne Shadow-DOM-Stuff) */
 import { getBases } from "../utils/env.js";
@@ -1882,7 +751,7 @@ export default class ChatController {
 }
 
 
---- ./frontend/components/chat.css ---
+--- ./components/chat.css ---
 
 /* frontend/components/chat.css */
 @layer reset, tokens, base, components, utilities;
@@ -2176,7 +1045,7 @@ export default class ChatController {
 }
 
 
---- ./frontend/components/ChatApp.js ---
+--- ./components/ChatApp.js ---
 
 import ChatController from "./ChatController.js";
 import { getBases, roomHashFromPath } from "../utils/env.js";
@@ -2226,7 +1095,7 @@ customElements.define('chat-app', ChatApp);
 export default ChatApp;
 
 
---- ./frontend/components/Dashboard.js ---
+--- ./components/Dashboard.js ---
 
 // frontend/components/Dashboard.js
 import "./AdminPanel.js";
@@ -2273,7 +1142,7 @@ customElements.define('chat-dashboard', class extends HTMLElement {
 });
 
 
---- ./frontend/components/admin-template.html ---
+--- ./components/admin-template.html ---
 
 <!-- components/admin-template.html -->
 <link rel="stylesheet" href="/components/admin.css" layer="components">
@@ -2311,7 +1180,7 @@ customElements.define('chat-dashboard', class extends HTMLElement {
 </template>
 
 
---- ./frontend/components/admin.css ---
+--- ./components/admin.css ---
 
 /* frontend/components/admin.css */
 
@@ -2679,7 +1548,7 @@ customElements.define('chat-dashboard', class extends HTMLElement {
 @layer overrides {}
 
 
---- ./frontend/styles/tokens.css ---
+--- ./styles/tokens.css ---
 
 /* ---------- frontend/styles/tokens.css ---------- */
 @layer tokens {
@@ -2708,7 +1577,7 @@ customElements.define('chat-dashboard', class extends HTMLElement {
 }
 
 
---- ./frontend/styles/landing.css ---
+--- ./styles/landing.css ---
 
 /* frontend/styles/landing.css */
 
@@ -2864,7 +1733,7 @@ customElements.define('chat-dashboard', class extends HTMLElement {
 }
 
 
---- ./frontend/img/chat-icon.png ---
+--- ./img/chat-icon.png ---
 
 ‰PNG
 
@@ -2879,7 +1748,7 @@ f"«m÷ ßöVÃ€6 r™ˆ´rÛ|û§™H«ùÆomeòÚúåş'62y5&~`­ûG}´ê±QÉ]
 Ğüœá Î	ÂÏÉ++äx-Ú\ +ƒõµ'oZÖŞF¡'	 qoVZpïrŒ»<¿DâçDU#ĞT’¿|\']ÌLyäÉùKV®Ùàş­;ĞË3o+€7üşÉÖ¯\2ÿÉGR"ê¨oş]ûÿ© # p?[ÔÉE¼¬- ˜Ç àëOÿ— # €hä9]Á;F  ¡Ğ]ÿÒpe! lê7µßl‹€Ey–kÎ1 •~~IW@P @È4Xû3`# €Ğ©ç~í—•^ XT¤şÍ¯# €ê×Wt|Ğ 6õÓ]çGÀ¦Óş¼5 6ÕíÏÚo9F  !—wµ¶€  @ö‹ËÚ·Ú§À¦†¢+Àïc ’õyOW@Ë‹ XT—ÚovÇÀ¦kŸ‘ç×1 ÙÆª+ÀŸc ºİ«}6Nãl ØT\‘öá °¨ğõÚt @h÷Ë]'î€Mığ?{Œ  B½¾ÿìÔc òÅ¼¡ıF`g4 ,Êób‹®€÷ú À¦&ÕuÚ1 0¢ïjŸ‘çö ˜Q¼şyÉ9a °¨ˆW´v€M=­}Œ@I lj”ö15c`Sw }Œ@& lªë‚~Œ  Ìº&´"ØÇ À°¦i#P1 65Dÿi °©„Á<F  æµ-ˆÇ ÀÄ2õ¸ 656hÇ ÀÌ’J´x 6Õ­PûÀ+ °¨°œ #  s›Œc `p#´ÿbİ$ ØTŸÃ#  £‹Şè1 0¼ç<F  ¦7áB@Ç ÀøR:F  æ÷N Ç À‚Â7h(Š€MÍÖş[Ê× €¥Õ>F`< lêNí¿İ¼ 6»Û¯c `M, €EMÖ>Fà“ °©Tıc>€MÅïñ9 ˜UÄ& /£	 ²} ²ëÿ! d×õ 7 Â›~	 ²Z	 Ùõ:  ÙE½
  á-l€ìÆÕ@vÉ¥ ]÷· »°µ Ş— »ïW@v‰‡ »è×  ¼%- İÄ İ  »€ìÂ áÍm€ì~T Ùõ+€ìbó  ;Ïo[  »)õ İı§  »oí€ì"7@xó¯ @v?ù/ d÷£ İ7ş ÙyW@x3ş Ù; Ùõ: ÙuÙ áı¦ ²ûY- d7ğ8 d×ı/ ]Ø: oV d÷ƒ3 İ·ÿ ÙÅ¼ á-m€ìÒ/@vƒÊ  »€ìÂ7@x¿j€ì~\ Ùİu ²»# ²ó,€ğ¦Ö@vß+€ìzî€ì"· @xİŞÿŞÿÉ^ŞgÄ/     IEND®B`‚
 
---- ./frontend/img/admin-icon.png ---
+--- ./img/admin-icon.png ---
 
 ‰PNG
 
@@ -2923,7 +1792,7 @@ lí¢ÏŠ/Jh66Nq‹ùæ©Q€'E%Tˆ~—¨ëC£1}®ŸáB[¼USkı&0+=ĞFodóíÌÊÙ×|ÛãöÏËfrÚ4í*óÍ÷ë
 V¾AvÍ €jh×±Úaë¡bAËÙö}A™éáC;]Î=Jcw…†K7ÊC3 TÃºµ  ˆIDAT *ÓJ¥¶©G³“¹¦à	ÆŠ’aãvëÁÃâ&V¾a^š€iÌ([ÛğSñšÚmŞRèÛl¤–îÍø,İ8†f `fo±údë¡¥Ì¶áõ¤ÿ²úmŞRì<RKwĞV¾qVÍ À¬>bõ;ÉÖ£É¢.#8ÆbÚS«K±“å·gİ'ÖL±‘åÉ—*9ü­—X·G±>5Z3wÓ»¬|5W
 è!-k«İYNzëT%>ÕQ9ò7¥x^Š§[~+ÕÒ*mB£›ÆïwÃ7ysÔW?`¾í¨BK¯I1ÏÇ¥?»zŠW¤ØËòÄYù%ëÃÆ))æ"ÎÛ×Ê6ÖDËĞĞeê¨4¡­f‡©Ğä2uŞÇ¦ØÇòî£k¥˜wˆ\æ™şÏ]|ìqŒ-òxœ*	ÿV+{?Ğ¿k%Ës4´Úì«)~e1µÎM±PÁ\:á`+ÛHwÇ>€I¨ºİO-æfyKŠ3,<h‡Ñç§XÑÊî¢×ë,®XMß‹šym+­µUóeSlâ)¾˜âtËçd©›ÿ"q©Ä)½ÛÓ-±‡`æ·r³Û¿Ùò¤ßèZú+X~óó~ ø›åöë£§˜O›i´§KŸu,šg ‰{záÕ.š×7ÿÿĞJÉÿúØÃ0€aJÛ{[8Å/Íÿ!àåQ	SÅÖÒmõkgc%?ë¥x}Š,ß×¾83¯ˆèõÍ_²ò' €î™è!@#vÚÔsØŞÓ‚–'ëy> –M}K¿ÎÊ¶“nœ}X®Ïfk§ØÎz~óÍ°-y\{ø † ‡€­Î°½—5Ìwvø=Ö¿Ï ›Zùv:44q’•=	Æaé€nùùôí3ÀVşíÿ	¡ }÷(y"\{ø `‹Y~S÷z èÓg fhµVÉö9)4sš•=ÎŠ=| øA{= ôé3€&t–nöiÔÏ¬ì‰ğ³ØÃ€ÿĞFH^ Š¾|(=ê«]ñšŠ9İÊ§Æ> ü‡V.\e~ }ø -£K×Ùÿ|h(ªt©Ğ¯Ç> ü­çöz Pm„ãRq±«•o—g†f€¢T2±äÉpPìáÀÿyšù= (Zÿp•mÎi¥f&°£q èí>çõ Ğòg€'¦ø·•m}C3@qËØÿ–>œJ<˜âÑ±‡ ÿãÃæ÷ Ğòj İ¬K¶…&VÍ .´×r‰â‹Ñ ³Ğ>ò^ ŠVG9¯°²ípNìáÃË*–÷nÊÉpgŠå¢ &à¹?@‹ŸaåÛa×Ğàêe6ú÷¡‡RlÈ 0¡šß€^–Z[PºH’–.šÜi÷£aG´_v«Cb úi%+?ámæh©Ï›;ÅMV6ÿ“C3@}?;Şò[ıd'€&j+á•ê& Lê|ó{ hé3ÀÖV>ÿmB3@¸åSì”âk–«ûı*ÅR|5ÅS<®Ş¡À½Ïü ZZ ‡•’¹ß•b¾Ğ  ÂãmÎ#™S‰>,b¹‚aÉ¼Í  €œiãıàV>ïMB3  `o7¿€VüÔÊæ|MŠG†f  À–JñOÏÏ š§UªÊëŒøxh  LÁOl<?ìnåó]34  ¦àÍæ÷  Õ Å¥20ÓÿÖÊæzQh  LÑâ–7*ózĞ'm‹{ZŠÏ¦xgŠ—X.¿»¬åB<¥é¯ÜÖ±¼Îÿ-)>™â»).Iñ€CïqÈ  Wß7¿€9…*Ş˜âòç¥øqŠR|9Åa)¾â€YâsÓÿB…Ù~˜â\Ë[ÿÕ|ç5LšK°ÌĞ­ @e¯µz }ˆßä  Ô·pŠû¬ş´ÕØaø&  N²ú7ÒCõº8Ñ €lkõo¦-ÆQ£46  ]±€åe{µo¨­Å£46  ]òM«Cm)n2ŸeŒ  „ÒúüÚ7Õ–âS£53  İò¨·[ık+ñ´Ñš €î9ÂêßX[ˆKGm`  ºhK«sm!öµ è"Mj»Ùêß`»*_¼âˆí @g}Ñêßd»§Ş´  t×s¬şM¶Ëñ¦‘[ €Óvº×[ımãş½i è¶ÏXı›mãø©4*  ]·bŠZ®ø›Xı›o­¸Õò–¿û¥xÒÚ €æÌ•b•/K±wŠo¥øSŠ‡¬şºd\•âäIñò+”h<  úF[ánâ-)¾”â)®³¼T®öÍ|²¸!ÅÙ)¾’â)61¾í 0eó¦X-ÅRìšâ“)NLñË—X®5ğ/+c×ƒÇ-).KqfŠïXÏğÎ[§X#Åüy €,iùAaÃ›§Ø*Å6ÓãÍ)v¶ü†şÎéÿç™şşÖÓÿ™g[ş6¿”å                                                                     }ğÿa™å½Ë9    IEND®B`‚
 
---- ./frontend/utils.js ---
+--- ./utils.js ---
 
 // frontend/utils.js
 // -----------------
@@ -2984,11 +1853,11 @@ export async function apiFetch(path, { method = "GET", body } = {}) {
 }
 
 
---- ./frontend/pages/404.html ---
+--- ./pages/404.html ---
 
 <h1>Page not Found - 404</h1>
 
---- ./frontend/pages/admin.html ---
+--- ./pages/admin.html ---
 
 <!DOCTYPE html>
 <html lang="de">
@@ -3008,7 +1877,7 @@ export async function apiFetch(path, { method = "GET", body } = {}) {
 </html>
 
 
---- ./frontend/pages/landing.html ---
+--- ./pages/landing.html ---
 
 <!DOCTYPE html>
 <html lang="de">
@@ -3046,7 +1915,7 @@ export async function apiFetch(path, { method = "GET", body } = {}) {
 </html>
 
 
---- ./frontend/pages/chat.html ---
+--- ./pages/chat.html ---
 
 <!DOCTYPE html>
 <html lang="de">
@@ -3075,7 +1944,27 @@ export async function apiFetch(path, { method = "GET", body } = {}) {
 </html>
 
 
---- ./frontend/api.js ---
+--- ./package.json ---
+
+{
+  "name": "chat-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+
+  "scripts": {
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest --config ../jest.frontend.config.js"
+  },
+
+  "devDependencies": {
+    "jest": "^29.6.1",
+    "jest-environment-jsdom": "^29.6.1",
+    "@testing-library/dom": "^8.0.0"
+  }
+}
+
+
+--- ./api.js ---
 
 // frontend/api.js
 // ---------------
@@ -3097,7 +1986,7 @@ export const updateBlocklist = (hash, list) =>
   });
 
 
---- ./frontend/utils/bus.js ---
+--- ./utils/bus.js ---
 
 // utils/bus.js
 // ------------
@@ -3116,7 +2005,7 @@ export const emit = (evt, detail = {}) =>
 export default { on, off, emit };
 
 
---- ./frontend/utils/sanitize.js ---
+--- ./utils/sanitize.js ---
 
 // utils/sanitize.js
 // -----------------
@@ -3150,7 +2039,7 @@ export default function sanitize(html) {
 }
 
 
---- ./frontend/utils/env.js ---
+--- ./utils/env.js ---
 
 // utils/env.js
 // ------------
@@ -3186,19 +2075,20 @@ export function roomHashFromPath(pathname = location.pathname) {
 }
 
 
---- ./frontend/tests/sanitize.test.js ---
+--- ./tests/sanitize.test.js ---
 
-import assert from "node:assert/strict";
+// frontend/tests/sanitize.test.js
 import sanitize from "../utils/sanitize.js";
 
-const evil = '<img src=x onerror=alert(1)><span class="ip-info">Okay</span>';
-const clean = sanitize(evil);
+describe("sanitize()", () => {
+  it("entfernt alle unerlaubten Tags", () => {
+    const evil = '<img src=x onerror=alert(1)><span class="ip-info">Okay</span>';
+    expect(sanitize(evil)).toBe('<span class="ip-info">Okay</span>');
+  });
+});
 
-assert.equal(clean, '<span class="ip-info">Okay</span>');
-console.log("âœ” sanitize() removes disallowed tags");
 
-
---- ./frontend/src/landing.js ---
+--- ./src/landing.js ---
 
 // Leitet vom Token-Formular zur Chat-Seite um
 function init() {
@@ -3217,7 +2107,7 @@ function init() {
 document.addEventListener('DOMContentLoaded', init);
 
 
---- ./frontend/src/chat-router.js ---
+--- ./src/chat-router.js ---
 
 // Initialisiert <chat-app> anhand der URL  /chat/<hash>   oder   /chat.html/<hash>
 import "/components/ChatApp.js";
