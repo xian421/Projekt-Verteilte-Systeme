@@ -33,7 +33,6 @@ export async function apiFetch(path, { method = "GET", body } = {}) {
     url.searchParams.set("_", Date.now());
   }
 
-  // Header mit Admin-Token und ggf. JSON-Content-Type
   const headers = {
     Authorization: `Bearer ${localStorage.getItem("adminToken")}`,
   };
@@ -41,14 +40,12 @@ export async function apiFetch(path, { method = "GET", body } = {}) {
     headers["Content-Type"] = "application/json";
   }
 
-  // Anfrage abschicken
   const res = await fetch(url.toString(), {
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
   });
 
-  // Antwort parsen und auf OK prüfen
   const payload = await res.json();
   if (!res.ok || !payload.ok) {
     throw new Error(payload.error || res.statusText);

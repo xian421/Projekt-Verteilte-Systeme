@@ -14,15 +14,14 @@ class ChatApp extends HTMLElement {
   constructor() { super(); this.attachShadow({ mode:'open' }); }
 
   async connectedCallback() {
-    const { http: HTTP_BASE, ws: WS_BASE } = getBases(this);   // <──  NEU
+    const { http: HTTP_BASE, ws: WS_BASE } = getBases(this);
     const tpl = document.createElement('template');
     tpl.innerHTML = await loadTemplate(HTTP_BASE);
     tpl.content.querySelector('link[rel="stylesheet"]').href =
                `${HTTP_BASE}/components/chat.css`;
     this.shadowRoot.append(tpl.content.cloneNode(true));
 
-    /* Falls du <chat-app room-hash="…"> nutzt, ist alles gut.
-       Wenn nicht, bleibt das alte Hash-Fallback wie gehabt. */
+ 
     const roomHash = this.getAttribute('room-hash')?.toLowerCase() || roomHashFromPath();
     
     const roomName = this.getAttribute('room-name') || '';

@@ -19,7 +19,7 @@ describe('config module', () => {
     process.env.NODE_ENV = 'development';
 
     const config = require('../lib/config');
-    expect(config.PORT).toBe(4441);
+    expect(config.PORT).toBe(8444);
     expect(config.ADMIN_PASSWORD).toBe('keule');
 
     // ADMIN_TOKEN ist SHA256 von 'keule'

@@ -2,7 +2,7 @@
 const request = require('supertest');
 
 describe('Chat-Backend API', () => {
-  const BASE = 'http://localhost:4441';
+  const BASE = 'http://localhost:8444';
 
   test('GET /rooms.json liefert Status 200 und Array', async () => {
     const res = await request(BASE).get('/rooms.json');

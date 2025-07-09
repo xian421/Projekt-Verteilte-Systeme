@@ -12,7 +12,7 @@ const { NODE_ENV, ADMIN_PASSWORD: _pw, PORT: _port } = process.env;
 
 // In Test/Dev mit Fallbacks
 const ADMIN_PASSWORD = _pw || "keule";
-const PORT           = Number(_port) || 4441;
+const PORT           = Number(_port) || 8444;
 
 const ADMIN_TOKEN = crypto
   .createHash("sha256")
